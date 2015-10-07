@@ -16,16 +16,16 @@
 
 import time
 import uuid
-import unittest2
+from neutron.tests import base
 from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
 
-class TestTasks(unittest2.TestCase):
-    def setUp(self, id=None):
-        self.id = id if id else str(uuid.uuid1())
-        self.tasks = tasks.Tasks(self.id)
+class TasksTestCase(base.BaseTestCase):
+    def setUp(self, tasks_id=None):
+        super(TasksTestCase, self).setUp()
+        self.tasks = tasks.Tasks(tasks_id if tasks_id else str(uuid.uuid1()))
 
     def tearDown(self, id=None):
-        pass
+        super(TasksTestCase, self).tearDown()
 
     @staticmethod
     def _prefeed_data(key):
@@ -56,18 +56,6 @@ class TestTasks(unittest2.TestCase):
         self.assertIn(subtask, self.tasks._tasks)
 
     def test_register_existing_task(self, **subtask):
-        """
-        subtask is a dictory, include two parts, func and params, it will
-        be executed like subtask['func'](*subtask[params]), the following
-        is a example format of subtask:
-        'subtask':
-                {'params': (
-                    <api_client.client.FortiosApiClient object at 0x2a14a90>,
-                    {'id': 2, 'vdom': 'root'}
-                ),
-                'func': <function wrapper at 0x2b62ed8>
-                }
-        """
         if not subtask:
             subtask = self._prefeed_data('subtask')
         self.tasks.register(**subtask)

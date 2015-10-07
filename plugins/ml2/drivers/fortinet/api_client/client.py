@@ -89,28 +89,15 @@ class FortiosApiClient(eventlet_client.EventletApiClient):
                 be None.
         '''
         if user:
-            userinfo = {
-                "username": user,
-                "secretkey": password
-            }
-            #return self._render(templates.LOGIN, userinfo)
-            message = self._render(templates.LOGIN, username=user, secretkey=password)
-            return message
+            return self._render(templates.LOGIN,
+                                username=user, secretkey=password)
         LOG.error(_('No username was assigned, username:%(username)s '
                     'and password:%(password)s'),
                   {'username': self._user, 'password': self._password})
 
 
     def logout(self):
-        '''Login to Fortigate.
-
-        Assumes same password is used for all controllers.
-        :param user: controller user (usually admin). Provided for
-                backwards compatibility. In the  normal mode of operation
-                this should be None.
-        :param password: controller password. Provided for backwards
-                compatibility. In the normal mode of operation this should
-                be None.
+        '''Logout to Fortigate.
         '''
         self.request("LOGOUT")
 
