@@ -27,6 +27,16 @@ class TestTasks(unittest2.TestCase):
     def tearDown(self, id=None):
         pass
 
+    @staticmethod
+    def _prefeed_data(key):
+        data = {
+            'subtask': {
+                'params': 1,
+                'func': time.sleep
+            }
+        }
+        return data.get(key, {})
+
     def test_register(self, **subtask):
         """
         subtask is a dictory, include two parts, func and params, it will
@@ -41,10 +51,7 @@ class TestTasks(unittest2.TestCase):
                 }
         """
         if not subtask:
-            subtask = {
-                'params': 1,
-                'func': time.sleep
-            }
+            subtask = self._prefeed_data('subtask')
         self.tasks.register(**subtask)
         self.assertIn(subtask, self.tasks._tasks)
 
@@ -62,10 +69,7 @@ class TestTasks(unittest2.TestCase):
                 }
         """
         if not subtask:
-            subtask = {
-                'params': 1,
-                'func': time.sleep
-            }
+            subtask = self._prefeed_data('subtask')
         self.tasks.register(**subtask)
         self.tasks.register(**subtask)
         count = self.tasks._tasks.count(subtask)
