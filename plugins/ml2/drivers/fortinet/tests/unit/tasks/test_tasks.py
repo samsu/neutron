@@ -13,38 +13,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import datetime
+
 import time
 import uuid
-import mock
 import unittest2
-from eventlet import event
-from eventlet import greenthread
-
-from neutron.common import exceptions
-from neutron.openstack.common import log as logging
-from neutron.openstack.common import loopingcall
 from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
-from neutron.plugins.ml2.drivers.fortinet.tasks import singleton
-from neutron.plugins.ml2.drivers.fortinet.common import resources
 
 class TestTasks(unittest2.TestCase):
     def setUp(self, id=None):
-        #self.name = name if name else uuid.uuid1()
-        #self.client = client
-        # self._tasks is a stack to store the rollback tasks of tasks executed.
-        # self._tasks example
-        # [
-        #   {
-        #       'data': {'vdom': 'osvdm1'},
-        #       'func': <function wrapper at 0x3ee2140>
-        #   },
-        #   {
-        #       'data': {'vdom': 'osvdm1'},
-        #       'func': <function wrapper at 0x3ee21b8>
-        #   }
-        # ]
-        # task id should be unified, here we can use context.request_id
         self.id = id if id else str(uuid.uuid1())
         self.tasks = tasks.Tasks(self.id)
 
@@ -95,5 +71,3 @@ class TestTasks(unittest2.TestCase):
         count = self.tasks._tasks.count(subtask)
         self.assertEqual(1, count)
 
-if __name__ == '__main__':
-    unittest2.main()
