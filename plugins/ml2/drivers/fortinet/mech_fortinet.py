@@ -41,6 +41,8 @@ from neutron.plugins.ml2.drivers.fortinet.db import models as fortinet_db
 from neutron.plugins.ml2.drivers.fortinet.api_client import client
 from neutron.plugins.ml2.drivers.fortinet.api_client import exception
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
+from neutron.plugins.ml2.drivers.fortinet.common import resources as resources
+from neutron.plugins.ml2.drivers.fortinet.tasks import constants as t_consts
 from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
 
 from neutron.agent import securitygroups_rpc
@@ -99,7 +101,6 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     def Fortinet_init(self):
         """Fortinet specific initialization for this class."""
         LOG.debug(_("FortinetMechanismDriver_init"))
-
         self._fortigate = {
             "address": cfg.CONF.ml2_fortinet.address,
             "username": cfg.CONF.ml2_fortinet.username,
@@ -113,13 +114,8 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         }
 
         api_server = [(self._fortigate["address"], 80, False)]
-        msg = {
-            "username": self._fortigate["username"],
-            "secretkey": self._fortigate["password"]
-        }
         self._driver = client.FortiosApiClient(api_server,
-                                               msg["username"],
-                                               msg["secretkey"])
+            self._fortigate["username"], self._fortigate["password"])
 
         for key in const.FORTINET_PARAMS:
             self.sync_conf_to_db(key)
@@ -128,9 +124,9 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         cls = fortinet_db.Fortinet_Interface
         ext_inf = {
             "name": self._fortigate["ext_interface"],
-            "vdom_name": const.EXT_VDOM
+            "vdom": const.EXT_VDOM
         }
-        record = fortinet_db.get_record(session, cls, **ext_inf)
+        record = fortinet_db.query_record(session, cls, **ext_inf)
         if not record:
             fortinet_db.add_record(session, cls, **ext_inf)
 
@@ -153,21 +149,21 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         cls = getattr(fortinet_db, const.FORTINET_PARAMS[param]["cls"])
         conf_list = self.get_range(param)
         session = db_api.get_session()
-        records = fortinet_db.get_records(session, cls)
+        records = fortinet_db.query_records(cls, session)
         for record in records:
             for key in const.FORTINET_PARAMS[param]["keys"]:
                 _element = const.FORTINET_PARAMS[param]["type"](record[key])
                 if _element not in conf_list and not record.allocated:
-                    kwargs = {key: record[key]}
-                    fortinet_db.delete_record(session, cls, **kwargs)
+                    kwargs.setdefault(key, record[key])
+                    fortinet_db.delete_record(cls, session, **kwargs)
         try:
             for i in range(0, len(conf_list),
                            len(const.FORTINET_PARAMS[param]["keys"])):
                 kwargs = {}
                 for key in const.FORTINET_PARAMS[param]["keys"]:
-                    kwargs[key] = conf_list[i]
+                    kwargs.setdefault(key, str(conf_list[i]))
                     i += 1
-                LOG.debug(_("!!!!!!! adding kwargs = %s" % kwargs))
+                LOG.debug(_("######### adding kwargs = %s" % kwargs))
                 fortinet_db.add_record(session, cls, **kwargs)
         except IndexError:
             LOG.error(_("The number of the configure range is not even,"
@@ -193,7 +189,43 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             LOG.debug(_("!!!!!!! result %s param_range = %s" % (param, result)))
         return result if isinstance(result, list) else list(result)
 
+    @staticmethod
+    def _getid(context):
+        id = getattr(context, 'request_id', None)
+        if not id:
+            raise ValueError("not get request_id")
+        return id
 
+    def add_record(self, context, cls, **kwargs):
+        res = cls.add_record(context, **kwargs)
+        if res.get('rollback', {}):
+            self.task_manager.add(self._getid(context), **res['rollback'])
+        return res.get('result', None)
+
+    """
+    def query_record(self, cls, context, **kwargs):
+        return fortinet_db.cls.query(context, **kwargs)
+
+    def query_records(self, cls, context, **kwargs):
+        return fortinet_db.cls.query(context, **kwargs)
+    """
+
+    def _rollback_on_err(self, context, e):
+        resources.Exinfo(e)
+        self.task_manager.update_status(self._getid(context),
+                                        t_consts.TaskStatus.ROLLBACK)
+
+    def add_dev_cnf(self, context, cls, **kwargs):
+        if isinstance(cls, type):
+            cls = cls()
+        res = cls.add(self._driver, kwargs)
+        if res.get('rollback', {}):
+            self.task_manager.add(self._getid(context), **res['rollback'])
+        return res.get('result', None)
+
+    @staticmethod
+    def _getip(ipsubnet, place):
+        return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
 
     def create_network_precommit(self, mech_context):
         """Create Network in the mechanism specific database table."""
@@ -209,24 +241,65 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         segment = mech_context.network_segments[0]
         network_type = segment['network_type']
         if network_type != 'vlan':
-            raise Exception(
-                _("Fortinet Mechanism: failed to create network, "
-                  "only network type vlan is supported"))
-        namespace = fortinet_db.get_namespace(context, tenant_id)
-        if not namespace:
-            self.add_namespace(context, tenant_id)
-        self.fortinet_add_vlink(context, tenant_id)
+            raise Exception(_("Fortinet Mechanism: failed to create network, "
+                              "only network type vlan is supported"))
+        try:
+            namespace = self.add_record(context,
+                                        fortinet_db.Fortinet_ML2_Namespace,
+                                        tenant_id=tenant_id)
+            vdom = resources.Vdom()
+            vdom.add()
+
+            vlink_vlan = self.add_record(context,
+                            fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                            vdom=namespace.vdom)
+            import ipdb; ipdb.set_trace()
+            vlink_ip = self.add_record(context,
+                            fortinet_db.Fortinet_Vlink_IP_Allocation,
+                            vdom=namespace.vdom, vlan_id=vlink_vlan.vlan_id)
+            if vlink_ip:
+                message = {
+                    "name": vlink_vlan.inf_name_ext_vdom,
+                    "vdom": const.EXT_VDOM
+                }
+                _vlan_inf = resources.VlanInterface()
+                ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
+                try:
+                    _vlan_inf.get(self._driver, message)
+                except exception.ResourceNotFound:
+                    message.setdefault('vlanid', vlink_vlan.vlan_id)
+                    message.setdefault('interface', "npu0_vlink0")
+                    message.setdefault('ip', self._getip(ipsubnet, 1))
+                    self.add_dev_cnf(context, _vlan_inf, **message)
+
+                message = {
+                    "name": vlink_vlan.inf_name_int_vdom,
+                    "vdom": namespace.vdom
+                }
+                try:
+                    _vlan_inf.get(self._driver, message)
+                except exception.ResourceNotFound:
+                    message.setdefault('vlanid', vlink_vlan.vlan_id)
+                    message.setdefault('interface', "npu0_vlink1")
+                    message.setdefault('ip', self._getip(ipsubnet, 2))
+                    self.add_dev_cnf(context, _vlan_inf, **message)
+
+
+            #self.fortinet_add_vlink(context, tenant_id)
+        except Exception as e:
+            self._rollback_on_err(context, e)
+            raise e
         LOG.info(_("create network (precommit): "
                    "network type = %(network_type)s "
                    "for tenant %(tenant_id)s"),
                  {'network_type': network_type,
                   'tenant_id': tenant_id})
 
+
     def create_network_postcommit(self, mech_context):
         """Create Network as a portprofile on the switch."""
         LOG.debug(_("++++++++++create_network_postcommit+++++++++++++++++++++"))
         LOG.debug(_("create_network_postcommit: called"))
-
         network = mech_context.current
         LOG.debug(_("&&&&& mech_context.current = %s" % network))
         if network["router:external"]:
@@ -236,35 +309,33 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         # ONLY depend on our db for getting back network attributes
         # this is so we can replay postcommit from db
         #context = mech_context._plugin_context
-
         network_id = network['id']
         #network_type = network['network_type']
         network_name = network["name"]
         tenant_id = network['tenant_id']
         #vlan_id = network['vlan']
-
         segments = mech_context.network_segments
         # currently supports only one segment per network
         segment = segments[0]
         network_type = segment['network_type']
         vlan_id = segment['segmentation_id']
         context = mech_context._plugin_context
-        namespace = fortinet_db.get_namespace(context, tenant_id)
+        namespace = self.query_record(fortinet_db.Fortinet_ML2_Namespace,
+                                      context, tenant_id=tenant_id)
         try:
             message = {
                 "name": const.PREFIX["inf"] + str(vlan_id),
                 "vlanid": vlan_id,
                 "interface": self._fortigate["int_interface"],
-                "vdom": namespace["vdom_name"],
+                "vdom": namespace["vdom"],
                 "alias": network_name
             }
             LOG.debug(_("message = %s"), message)
-            self._driver.request("ADD_VLAN_INTERFACE", **message)
-        except Exception:
-            LOG.exception(_("Fortinet API client: failed in create network"))
-            # TODO: DB
-            pass
-            #fortinet_db.delete_network(context, network_id)
+            self.add_dev_cnf(context, self._driver,
+                             resources.VlanInterface, **message)
+            #self._driver.request("ADD_VLAN_INTERFACE", **message)
+        except Exception as e:
+            self._rollback_on_err(context, e)
             raise ml2_exc.MechanismDriverError(
                 _("Fortinet Mechanism: create_network_postcommmit failed"))
 
@@ -327,14 +398,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 self.fortinet_delete_vlink(context, tenant_id)
                 namespace = fortinet_db.get_namespace(context, tenant_id)
                 message = {
-                        "name": namespace.vdom_name,
+                        "name": namespace.vdom,
                 }
                 self._driver.request("DELETE_VDOM", **message)
                 fortinet_db.delete_namespace(context, tenant_id)
                 LOG.info(_("delete network (postcommit): tenant %(tenant_id)s"
-                       "vdom_name = %(vdom_name)s"),
+                       "vdom = %(vdom)s"),
                       {'tenant_id': tenant_id,
-                       "vdom_name": namespace.vdom_name})
+                       "vdom": namespace.vdom})
             except Exception:
                 LOG.exception(_("Fortinet API client: failed to delete network"))
                 raise Exception(
@@ -394,7 +465,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                   "delete_network_postcommit failed"))
         else:
             namespace = fortinet_db.get_namespace(context, tenant_id)
-            vdom = namespace["vdom_name"]
+            vdom = namespace["vdom"]
             session = mech_context._plugin_context.session
             self._segments = db.get_network_segments(session, network_id)
             LOG.debug(_("  self._segments = %s" % self._segments))
@@ -466,14 +537,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             if subnet:
                 try:
                     message = {
-                        "vdom": subnet.vdom_name,
+                        "vdom": subnet.vdom,
                         "id": subnet.mkey
                     }
                     self._driver.request("DELETE_DHCP_SERVER", **message)
                     fortinet_db.delete_subnet(context, subnet_id)
-                    if not fortinet_db.get_subnets(context, subnet.vdom_name):
+                    if not fortinet_db.get_subnets(context, subnet.vdom):
                         message = {
-                        "name": subnet.vdom_name
+                        "name": subnet.vdom
                         }
                         self._driver.request("DELETE_VDOM", **message)
 
@@ -495,7 +566,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         reserved_ips = fortinet_db.get_reserved_ips(context, subnet_id)
         subnet = fortinet_db.get_subnet(context, subnet_id)
         dhcp_server_id = subnet.mkey
-        vdom = subnet.vdom_name
+        vdom = subnet.vdom
         for reserved_ip in reserved_ips:
             reserved_address = {
                 "id": reserved_ip.edit_id,
@@ -544,11 +615,11 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
         elif port["device_owner"] in ['network:router_interface']:
             # add firewall address and address group
-            vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
+            vdom = fortinet_db.get_namespace(context, tenant_id).vdom
             if subnet.cidr:
                 _net = netaddr.IPNetwork(subnet.cidr)
                 addr = {
-                    "vdom_name": vdom_name,
+                    "vdom": vdom,
                     "name": "%s" % _net.network,
                     "subnet": "%s %s" % (_net.network, _net.netmask)
                 }
@@ -556,14 +627,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 self.add_address(context, **addr)
 
                 addrgrp = {
-                    "name": const.PREFIX['addrgrp'] + vdom_name,
-                    "vdom_name": vdom_name,
+                    "name": const.PREFIX['addrgrp'] + vdom,
+                    "vdom": vdom,
                     "members": [addr['name'],]
                  }
                 LOG.debug(_("##### addrgrp = %s" % addrgrp))
                 self.add_member_addrgrp(context, **addrgrp)
                 policy = {
-                    "vdom_name": vdom_name,
+                    "vdom": vdom,
                     "srcintf": "any",
                     "srcaddr": addrgrp['name'],
                     "dstintf": "any",
@@ -595,7 +666,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         subnet_id = port["fixed_ips"][0]["subnet_id"]
         #ip_address = port["fixed_ips"][0]["ip_address"]
         #mac = port["mac_address"]
-        vdom_name = fortinet_db.get_subnet(context, subnet_id).vdom_name
+        vdom = fortinet_db.get_subnet(context, subnet_id).vdom
         kwargs = {'id': subnet_id}
         session = context.session
         subnet = fortinet_db.get_record(session, models_v2.Subnet, **kwargs)
@@ -616,15 +687,15 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             # add firewall address and address group
             _net = netaddr.IPNetwork(subnet.cidr)
             addrgrp = {
-                    "name": const.PREFIX['addrgrp'] + vdom_name,
-                    "vdom_name": vdom_name,
+                    "name": const.PREFIX['addrgrp'] + vdom,
+                    "vdom": vdom,
                     "members": ["%s" % _net.network]
                  }
             LOG.debug(_("##### addrgrp = %s" % addrgrp))
             self.delete_member_addrgrp(context, **addrgrp)
 
             addr = {
-                "vdom_name": vdom_name,
+                "vdom": vdom,
                 "name": "%s" % _net.network
             }
             LOG.debug(_("##### addr = %s" % addr))
@@ -656,22 +727,20 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     def _update_record(self, context, param, **kwargs):
         LOG.debug(_("_update_record: called"))
         kws = {
-                "vdom_name": kwargs["vdom_name"],
+                "vdom": kwargs["vdom"],
                 "allocated": kwargs["allocated"]
         }
         cls = getattr(fortinet_db, const.FORTINET_PARAMS[param]["cls"])
-        record = fortinet_db.get_record(context, cls, **kws)
+        record = fortinet_db.query_record(context, cls, **kws)
         LOG.debug(_("!!!!@@!! record: %s" % record))
         if not record:
             kws = {"allocated": False}
-            record = fortinet_db.get_record(context, cls, **kws)
-            for key, value in kwargs.iteritems():
-                setattr(record, key, value)
+            record = fortinet_db.query_record(context, cls, **kws)
+            cls.update(context, record, **kwargs)
             LOG.debug(_("!!!!! context.session= %(context.session)s,"
                     "cls=%(cls)s, record=%(record)s",
                     {'context.session': context.session,
                      'cls': cls, 'record': record}))
-            fortinet_db.update_record(context, record)
             return record
         return None
 
@@ -680,7 +749,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             namespace = fortinet_db.create_namespace(context, tenant_id)
             LOG.debug(_("!!!!!!! namespace = %s" % namespace))
             message = {
-                "name": namespace["vdom_name"]
+                "name": namespace["vdom"]
             }
             LOG.debug(_("message = %s"), message)
             self._driver.request("ADD_VDOM", **message)
@@ -700,7 +769,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 return None
             LOG.debug(_("!!!!!!! namespace = %s" % namespace))
             message = {
-                "name": namespace["vdom_name"]
+                "name": namespace["vdom"]
             }
             LOG.debug(_("message = %s"), message)
             self._driver.request("DELETE_VDOM", **message)
@@ -749,7 +818,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.debug(_("!!!!! namespace = %s" % namespace))
         if not namespace:
             namespace = self.add_namespace(context, tenant_id)
-        kwargs["vdom_name"] = namespace.vdom_name
+        kwargs["vdom"] = namespace.vdom
         LOG.debug(_("##### kwargs = %s" % kwargs))
         LOG.debug(_("##### port = %s" % port))
         cls = fortinet_db.Fortinet_Vlink_Vlan_Allocation
@@ -764,7 +833,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         try:
             self._add_ippool(ip_address)
             kwargs = {
-                "vdom_name": const.EXT_VDOM,
+                "vdom": const.EXT_VDOM,
                 "srcintf": vlink.inf_name_ext_vdom,
                 "dstintf": self._fortigate["ext_interface"],
                 "poolname": ip_address
@@ -776,7 +845,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 # add subip
             kwargs = {
                 "name": self._fortigate["ext_interface"],
-                "vdom_name": const.EXT_VDOM,
+                "vdom": const.EXT_VDOM,
                 "ip": ip_address,
                 "netmask": str(netmask)
             }
@@ -789,7 +858,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         except Exception:
             LOG.error(_("set_ext_gw failed"))
             kwargs = {
-               "vdom_name": const.EXT_VDOM,
+               "vdom": const.EXT_VDOM,
                "poolname": ip_address
             }
             self._delete_firewall_policy(context, **kwargs)
@@ -802,7 +871,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         :param context:
         :param kwargs: example
         {
-            "vdom_name": "osvdm1",
+            "vdom": "osvdm1",
             "name": "192.168.33.0",
             "subnet": "192.168.33.0 255.255.255.0"
         }
@@ -816,13 +885,13 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.debug(_("### kwargs = %s" % kwargs))
         if not record:
             try:
-                if kwargs.has_key("vdom_name"):
-                    kwargs.setdefault("vdom", kwargs["vdom_name"])
-                    del kwargs["vdom_name"]
+                if kwargs.has_key("vdom"):
+                    kwargs.setdefault("vdom", kwargs["vdom"])
+                    del kwargs["vdom"]
                 self._driver.request("ADD_FIREWALL_ADDRESS", **kwargs)
 
                 if kwargs.has_key("vdom"):
-                    kwargs.setdefault("vdom_name", kwargs["vdom"])
+                    kwargs.setdefault("vdom", kwargs["vdom"])
                     del kwargs["vdom"]
                 record = fortinet_db.add_record(session, cls, **kwargs)
                 LOG.debug(_("### record = %s" % record))
@@ -842,13 +911,13 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if not record:
             return None
         try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
             self._driver.request("DELETE_FIREWALL_ADDRESS", **kwargs)
 
             if kwargs.has_key("vdom"):
-                kwargs.setdefault("vdom_name", kwargs["vdom"])
+                kwargs.setdefault("vdom", kwargs["vdom"])
                 del kwargs["vdom"]
             fortinet_db.delete_record(session, cls, **kwargs)
         except Exception:
@@ -875,14 +944,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         #record = fortinet_db.get_record(session, cls, **kwargs)
         #LOG.debug(_("### record = %s" % record))
         try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
             self._driver.request("ADD_FIREWALL_ADDRGRP", **kwargs)
             for name in kwargs["members"]:
                 addrinfo = {
                     "name": name,
-                    "vdom_name": kwargs["vdom"]
+                    "vdom": kwargs["vdom"]
                 }
                 record = fortinet_db.get_record(session, cls, **addrinfo)
                 LOG.debug(_("### record=%s" % record))
@@ -927,7 +996,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 for name in kwargs["members"]:
                     addrinfo = {
                         "name": name,
-                        "vdom_name": kwargs["vdom_name"]
+                        "vdom": kwargs["vdom"]
                     }
                     record = fortinet_db.get_record(session, cls, **addrinfo)
                     if not record.group:
@@ -939,9 +1008,9 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                   {"member": record})
                 for record in records:
                     kwargs["members"].append(record.name)
-                if kwargs.has_key("vdom_name"):
-                    kwargs.setdefault("vdom", kwargs["vdom_name"])
-                    del kwargs["vdom_name"]
+                if kwargs.has_key("vdom"):
+                    kwargs.setdefault("vdom", kwargs["vdom"])
+                    del kwargs["vdom"]
                 self._driver.request("SET_FIREWALL_ADDRGRP", **kwargs)
             except Exception:
                 with excutils.save_and_reraise_exception():
@@ -974,9 +1043,9 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             raise
 
         try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
             members = []
             for record in records:
                 if record.name in kwargs["members"]:
@@ -991,7 +1060,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 self._driver.request("SET_FIREWALL_ADDRGRP", **kwargs)
             else:
                 policy = {
-                    "vdom_name": kwargs['vdom'],
+                    "vdom": kwargs['vdom'],
                     "srcintf": "any",
                     "srcaddr": kwargs['name'],
                     "dstintf": "any",
@@ -1037,7 +1106,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         session = context.session
         ip_address = port["fixed_ips"][0]["ip_address"]
         kwargs = {
-            "vdom_name": const.EXT_VDOM,
+            "vdom": const.EXT_VDOM,
             "poolname": ip_address
         }
         try:
@@ -1047,7 +1116,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                 port["fixed_ips"][0]["subnet_id"])
             kwargs = {
                 "name": self._fortigate["ext_interface"],
-                "vdom_name": const.EXT_VDOM
+                "vdom": const.EXT_VDOM
             }
             ip = "%s %s" % (ip_address, netmask)
             cls = fortinet_db.Fortinet_Interface
@@ -1068,7 +1137,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         :param kwargs: example format
             {
                 "name": "port37",
-                "vdom_name": "osvdm1",
+                "vdom": "osvdm1",
                 "ip": "10.160.37.110 255.255.255.0"
             }
         :return:
@@ -1076,8 +1145,8 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.debug(_("#### _add_interface_ip %s" % kwargs))
         session = context.session
         update_inf = kwargs.copy()
-        update_inf.setdefault("vdom", update_inf["vdom_name"])
-        del update_inf["vdom_name"]
+        update_inf.setdefault("vdom", update_inf["vdom"])
+        del update_inf["vdom"]
         cls = fortinet_db.Fortinet_Interface
         del kwargs["ip"]
         del kwargs["netmask"]
@@ -1088,14 +1157,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 res = self._driver.request("SET_VLAN_INTERFACE", **update_inf)
                 if 200 == res["http_status"]:
                     if update_inf.has_key("vdom"):
-                        update_inf.setdefault("vdom_name", update_inf["vdom"])
+                        update_inf.setdefault("vdom", update_inf["vdom"])
                         del update_inf["vdom"]
                     fortinet_db.update_record(context, interface, **update_inf)
             except Exception:
                 LOG.exception(_("Failed to add interface address"))
                 update_inf = {
                     "name": kwargs["name"],
-                    "vdom": kwargs["vdom_name"],
+                    "vdom": kwargs["vdom"],
                     "ip": const.EXT_DEF_DST
                 }
                 self._driver.request("SET_VLAN_INTERFACE", **update_inf)
@@ -1109,7 +1178,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             {
                 "name": "port37",
                 "ip": "10.160.37.20 255.255.255.0",
-                "vdom_name": "root"
+                "vdom": "root"
             }
         :return:
         """
@@ -1123,7 +1192,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 new_ip = subips.pop()
                 update_inf = {
                     "name": interface["name"],
-                    "vdom": interface["vdom_name"],
+                    "vdom": interface["vdom"],
                     "secondaryips": subips
                 }
                 self._driver.request("SET_VLAN_INTERFACE", **update_inf)
@@ -1131,7 +1200,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 record = {
                     "ip": new_ip,
                     "interface": interface["name"],
-                    "vdom": interface["vdom_name"]
+                    "vdom": interface["vdom"]
                 }
                 fortinet_db.delete_record(session, cls, **record)
                 del update_inf["secondaryips"]
@@ -1139,7 +1208,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             else:
                 update_inf = {
                     "name": interface["name"],
-                    "vdom": interface["vdom_name"],
+                    "vdom": interface["vdom"],
                     "ip": const.EXT_DEF_DST
                 }
 
@@ -1159,16 +1228,16 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             {
                 "ip": "10.160.37.20 255.255.255.0",
                 "interface": "port37",
-                "vdom_name": "root"
+                "vdom": "root"
             }
         :return:
         """
         LOG.debug(_("#### _add_interface_subip %s" % kwargs))
         session = context.session
         try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
             org_subips = fortinet_db.get_interface_subips(context,
                                                           kwargs["name"])
             org_subips.append(kwargs["ip"])
@@ -1223,9 +1292,9 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 return
             LOG.debug(_("#### org_subips=%s" % org_subips))
             org_subips.remove(kwargs["ip"])
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
             LOG.debug(_("#### org_subips=%s" % org_subips))
             update_inf = {
                 "name": kwargs["name"],
@@ -1256,8 +1325,8 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                    **kwargs)
                 LOG.debug(_("### enter: record= %s" % record))
                 message = kwargs
-                message["vdom"] = message.get("vdom_name", const.EXT_VDOM)
-                message.pop("vdom_name", None)
+                message["vdom"] = message.get("vdom", const.EXT_VDOM)
+                message.pop("vdom", None)
                 resp = self._driver.request("ADD_FIREWALL_POLICY", **message)
                 kwargs["edit_id"] = resp["results"]["mkey"]
                 LOG.debug(_("### kwargs= %s" % kwargs))
@@ -1282,7 +1351,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if record:
             try:
                 if record.edit_id:
-                    message = {"vdom": record.vdom_name, "id": record.edit_id}
+                    message = {"vdom": record.vdom, "id": record.edit_id}
                     resp = self._driver.request("DELETE_FIREWALL_POLICY",
                                                 **message)
                     LOG.debug(_("### resp=%s" % resp))
@@ -1292,18 +1361,20 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                         fortinet_db.delete_record(session, cls, **kwargs)
             except Exception:
                 LOG.error(_("Failed to delete firewall policy "
-                                "interface. vdom_name=%(vdom_name)s, "
+                                "interface. vdom=%(vdom)s, "
                                 "id=%(id)s") %
-                           ({"vdom_name": vdom_name, "id": record.edit_id}))
+                           ({"vdom": vdom, "id": record.edit_id}))
                 raise Exception
 
 
     def fortinet_add_vlink(self, context, tenant_id):
+        #cls = fortinet_db.Fortinet_ML2_Namespace
+        _namespace = fortinet_db.query_record(context,
+                fortinet_db.Fortinet_ML2_Namespace, tenant_id=tenant_id)
 
-        vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        LOG.debug(_("!!!!! vdom_name = %s" % vdom_name))
+        LOG.debug(_("!!!!! vdom = %s" % vdom))
         vlink_vlan = {
-            "vdom_name": vdom_name,
+            "vdom": vdom,
             "allocated": True
         }
         LOG.debug(_("!!!!! vlink_vlan = %s" % vlink_vlan))
@@ -1318,7 +1389,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                        str(vlink_vlan_allocation.vlan_id)
             fortinet_db.update_record(context, vlink_vlan_allocation)
             vlink_ip = {
-                "vdom_name": vdom_name,
+                "vdom": vdom,
                 "vlan_id": vlink_vlan_allocation.vlan_id,
                 "allocated": True
             }
@@ -1358,7 +1429,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 try:
                     message = {
                         "name": vlink_vlan_allocation.inf_name_int_vdom,
-                        "vdom": vdom_name
+                        "vdom": vdom
                     }
                     response = self._driver.request("GET_VLAN_INTERFACE", **message)
                     if 200 == response["http_status"]:
@@ -1367,13 +1438,13 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                     message = {
                         "name": vlink_vlan_allocation.inf_name_int_vdom,
                         "vlanid": vlink_vlan_allocation.vlan_id,
-                        "vdom": vdom_name,
+                        "vdom": vdom,
                         "interface": "npu0_vlink1",
                         "ip": "%s %s" % (ipsubnet[2], ipsubnet.netmask)
                     }
                     self._driver.request("ADD_VLAN_INTERFACE", **message)
                     message = {
-                        "vdom": vdom_name,
+                        "vdom": vdom,
                         "dst": "0.0.0.0 0.0.0.0",
                         "device": vlink_vlan_allocation.inf_name_int_vdom,
                         "gateway": "0.0.0.0"
@@ -1396,9 +1467,9 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
     def fortinet_delete_vlink(self, context, tenant_id):
         session = context.session
-        vdom_name = fortinet_db.get_namespace(context, tenant_id)
+        vdom = fortinet_db.get_namespace(context, tenant_id)
         vlink_vlan = {
-            "vdom_name": vdom_name,
+            "vdom": vdom,
             "allocated": True
         }
         vlink_vlan_allocation = fortinet_db.get_record(session,
@@ -1407,7 +1478,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if not vlink_vlan_allocation:
             return False
         vlink_ip = {
-            "vdom_name": vdom_name,
+            "vdom": vdom,
             "vlan_id": vlink_vlan_allocation.vlanid,
             "allocated": True
         }
@@ -1437,7 +1508,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     def fortinet_reset_vlink(context, vlink_vlan_allocation,
                              vlink_ip_allocation):
         vlink_vlan = {
-            "vdom_name": None,
+            "vdom": None,
             "inf_name_int_vdom": None,
             "inf_name_ext_vdom": None,
             "allocated": False
@@ -1446,7 +1517,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             fortinet_db.update_record(context, vlink_vlan_allocation,
                                       **vlink_vlan)
         vlink_ip = {
-            "vdom_name": None,
+            "vdom": None,
             "vlan_id": None,
             "allocated": False
         }

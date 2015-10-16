@@ -198,7 +198,7 @@ class Fortinet_Firewall_IPPool(model_base.BASEV2):
 class Fortinet_Firewall_Address(model_base.BASEV2):
     __tablename__ = 'fortinet_firewall_addresses'
     name = sa.Column(sa.String(36), primary_key=True)
-    vdom = sa.Column(sa.String(11))
+    vdom = sa.Column(sa.String(11), primary_key=True)
     subnet = sa.Column(sa.String(32))
     associated_interface = sa.Column(sa.String(11), default=None)
     group = sa.Column(sa.String(32), default=None)

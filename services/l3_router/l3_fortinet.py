@@ -481,7 +481,8 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                 if secondaryip:
                     message = {
                         "vdom_name": const.EXT_VDOM,
-                        "srcintf": self._fortigate["ext_interface"],
+                        #"srcintf": self._fortigate["ext_interface"],
+                        "srcintf": 'any',
                         "dstintf": secondaryip["name"],
                         "dstaddr": vip["name"],
                         "nat": "enable"
@@ -931,7 +932,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                 try:
                     kwargs = {"bound": True}
                     fortinet_db.update_record(context, record, **kwargs)
-                    vl_inf = self._get_vl_inf(session, vdom_name)
+                    #vl_inf = self._get_vl_inf(session, vdom_name)
                     if not mappedip:
                         mappedip = floatingip["fixed_ip_address"]
                     message = {
@@ -939,6 +940,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                         "name": record.vip_name,
                         "extip": self._get_ip(record.ip_subnet, 2),
                         "extintf": vl_inf[0],
+                        #"extintf": 'any',
                         "mappedip": mappedip
                     }
                     resp = self._driver.request("ADD_FIREWALL_VIP", **message)
@@ -972,7 +974,8 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                     "vdom": const.EXT_VDOM,
                     "name": kwargs["vip_name"],
                     "extip": kwargs["vip_name"],
-                    "extintf": self._fortigate["ext_interface"],
+                    #"extintf": self._fortigate["ext_interface"],
+                    "extintf": 'any',
                     "mappedip": self._get_ip(record.ip_subnet, 2)
                 }
                 LOG.debug(_("### message=%s" % message))

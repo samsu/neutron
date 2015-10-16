@@ -192,7 +192,8 @@ class ApiRequest(object):
                 elif response.status == httplib.SERVICE_UNAVAILABLE:
                     is_conn_service_unavail = True
 
-                if response.status not in [httplib.MOVED_PERMANENTLY, httplib.FOUND,
+                if response.status not in [httplib.MOVED_PERMANENTLY,
+                                           httplib.FOUND,
                                            httplib.TEMPORARY_REDIRECT]:
                     break
                 elif redirects >= self._redirects:

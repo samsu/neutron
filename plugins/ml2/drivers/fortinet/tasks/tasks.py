@@ -419,7 +419,7 @@ if __name__ == "__main__":
         a = FirewallPolicy()
         r = RouterStatic()
         data0 = {"vdom": "root", "id": 2}
-        #data = {"vdom_name": "root"}
+        #data = {"vdom": "root"}
         record = {
             'subnet_id': 'aadfadfadfadfsdfas',
             'vdom': 'root',
@@ -444,6 +444,7 @@ if __name__ == "__main__":
             'params': (context, record),
             'func': dbr.delete
         }
+
         t = Tasks(id)
 
         tm.add(id, **db_rollback)
@@ -501,7 +502,7 @@ if __name__ == "__main__":
             }
         }
         """
-        #"""
+        """
         res = r.add(cli, data1)
         print "################"
         print "##### res = %s" % res
@@ -533,7 +534,7 @@ if __name__ == "__main__":
         #context.session.commit()
         print "##################################"
         #a.get(cli, data)
-        #"""
+        """
         ################
 
     except Exception as e:

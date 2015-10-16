@@ -258,7 +258,6 @@ class ApiClientBase(object):
 
         Returns: Normalized conn_param tuple
         """
-        LOG.debug(_("#### _normalize_conn_params conn_or_conn_params=%s" % str(conn_or_conn_params)))
         if (not isinstance(conn_or_conn_params, tuple) and
             not isinstance(conn_or_conn_params, httplib.HTTPConnection)):
             LOG.debug(_("Invalid conn_params value: '%s'"),
@@ -269,7 +268,6 @@ class ApiClientBase(object):
         else:
             conn_params = conn_or_conn_params
         host, port, is_ssl = conn_params
-        LOG.debug(_("#### _normalize_conn_params conn_params=%s" % str(conn_params)))
         if port is None:
             port = 443 if is_ssl else 80
         return (host, port, is_ssl)
