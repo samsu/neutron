@@ -42,7 +42,7 @@ def add_record(context, cls, **kwargs):
     return {}
 
 def delete_record(context, cls, **kwargs):
-    return cls.delete_record(context, **kwargs)
+    return cls.delete_record(context, kwargs)
 
 def query_record(context, cls, **kwargs):
     return cls.query(context, **kwargs)
@@ -90,8 +90,12 @@ class DBbase(object):
             raise os_db_exception.DBError
 
     @classmethod
-    def delete_record(cls, context, **kwargs):
-        """Delete vlanid to be allocated into the table"""
+    def delete_record(cls, context, kwargs):
+        """
+        Delete the record with the value of kwargs from the database,
+        kwargs is a dictionary variable, here should not pass into a
+        variable like **kwargs
+        """
         session = get_session(context)
         with session.begin(subtransactions=True):
             record = cls.query(context, **kwargs)
@@ -229,7 +233,7 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
 
 
     @classmethod
-    def delete_record(cls, context, **kwargs):
+    def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
         session = get_session(context)
         with session.begin(subtransactions=True):
@@ -246,7 +250,8 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
     vlan_id = sa.Column(sa.Integer)
     allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
 
-    def _set_null(self, **kwargs):
+    @staticmethod
+    def _set_null(**kwargs):
         """
         set all value of keys in kwargs to the default value(None or False)
         _default_null = {
@@ -262,7 +267,6 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
                 kwargs[key] = None
         return kwargs
 
-
     @classmethod
     def add_record(cls, context, **kwargs):
         session = get_session(context)
@@ -272,8 +276,9 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
                 record = cls.query(context, allocated=False)
                 kwargs.setdefault('allocated', True)
                 cls.update_record(context, record, **kwargs)
-                rollback = record._prepare_rollback(context, cls.delete_record,
-                                                 **kwargs)
+                rollback = record._prepare_rollback(context,
+                                                    cls.delete_record,
+                                                    **kwargs)
             else:
                 rollback = {}
         ## need to check the attribute in the record whether updated
@@ -282,13 +287,13 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
 
 
     @classmethod
-    def delete_record(cls, context, **kwargs):
+    def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
         session = get_session(context)
         with session.begin(subtransactions=True):
             record = cls.query(context, **kwargs)
             if record:
-                cls.update(context, record, cls._set_null(**kwargs))
+                record.update(context, record, cls._set_null(**kwargs))
         return record
 
 

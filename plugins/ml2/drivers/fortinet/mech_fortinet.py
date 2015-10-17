@@ -215,17 +215,22 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         self.task_manager.update_status(self._getid(context),
                                         t_consts.TaskStatus.ROLLBACK)
 
+    """
     def add_dev_cnf(self, context, cls, **kwargs):
         if isinstance(cls, type):
             cls = cls()
         res = cls.add(self._driver, kwargs)
-        if res.get('rollback', {}):
-            self.task_manager.add(self._getid(context), **res['rollback'])
-        return res.get('result', None)
+    """
 
     @staticmethod
     def _getip(ipsubnet, place):
         return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
+
+    def op(self, context, func, **data):
+        res = func(self._driver, data)
+        if res.get('rollback', {}):
+            self.task_manager.add(self._getid(context), **res['rollback'])
+        return res.get('result', res)
 
     def create_network_precommit(self, mech_context):
         """Create Network in the mechanism specific database table."""
@@ -247,45 +252,40 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             namespace = self.add_record(context,
                                         fortinet_db.Fortinet_ML2_Namespace,
                                         tenant_id=tenant_id)
-            vdom = resources.Vdom()
-            vdom.add()
+            self.op(context, resources.Vdom.add, name=namespace.vdom)
 
             vlink_vlan = self.add_record(context,
                             fortinet_db.Fortinet_Vlink_Vlan_Allocation,
                             vdom=namespace.vdom)
-            import ipdb; ipdb.set_trace()
+
             vlink_ip = self.add_record(context,
                             fortinet_db.Fortinet_Vlink_IP_Allocation,
                             vdom=namespace.vdom, vlan_id=vlink_vlan.vlan_id)
             if vlink_ip:
-                message = {
-                    "name": vlink_vlan.inf_name_ext_vdom,
-                    "vdom": const.EXT_VDOM
-                }
-                _vlan_inf = resources.VlanInterface()
                 ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
                 try:
-                    _vlan_inf.get(self._driver, message)
+                    self.op(context, resources.VlanInterface.get,
+                            name=vlink_vlan.inf_name_ext_vdom,
+                            vdom=const.EXT_VDOM)
                 except exception.ResourceNotFound:
-                    message.setdefault('vlanid', vlink_vlan.vlan_id)
-                    message.setdefault('interface', "npu0_vlink0")
-                    message.setdefault('ip', self._getip(ipsubnet, 1))
-                    self.add_dev_cnf(context, _vlan_inf, **message)
-
-                message = {
-                    "name": vlink_vlan.inf_name_int_vdom,
-                    "vdom": namespace.vdom
-                }
+                    self.op(context, resources.VlanInterface.add,
+                            name=vlink_vlan.inf_name_ext_vdom,
+                            vdom=const.EXT_VDOM,
+                            vlanid=vlink_vlan.vlan_id,
+                            interface="npu0_vlink0",
+                            ip=self._getip(ipsubnet, 1))
                 try:
-                    _vlan_inf.get(self._driver, message)
+                    self.op(context, resources.VlanInterface.get,
+                            name=vlink_vlan.inf_name_int_vdom,
+                            vdom=namespace.vdom)
                 except exception.ResourceNotFound:
-                    message.setdefault('vlanid', vlink_vlan.vlan_id)
-                    message.setdefault('interface', "npu0_vlink1")
-                    message.setdefault('ip', self._getip(ipsubnet, 2))
-                    self.add_dev_cnf(context, _vlan_inf, **message)
+                    self.op(context, resources.VlanInterface.add,
+                            name=vlink_vlan.inf_name_ext_vdom,
+                            vdom=namespace.vdom,
+                            vlanid=vlink_vlan.vlan_id,
+                            interface="npu0_vlink1",
+                            ip=self._getip(ipsubnet, 2))
 
-
-            #self.fortinet_add_vlink(context, tenant_id)
         except Exception as e:
             self._rollback_on_err(context, e)
             raise e

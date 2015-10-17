@@ -19,10 +19,12 @@ import httplib
 import sys
 import os
 import functools
+from types import MethodType
 
 from neutron.openstack.common import log as logging
 from neutron.plugins.ml2.drivers.fortinet.api_client \
     import exception as api_ex
+
 
 LOG = logging.getLogger(__name__)
 
@@ -62,7 +64,33 @@ class Null(object):
     def __str__(self):
         return "Null"
 
+class DefaultClassMethods(type):
+    def __getattr__(cls, attr):
+        if str(attr).upper() not in OPS:
+            raise AttributeError(attr)
+        if 'ADD' == str(attr).upper():
+            @rollback
+            def _defaultClassMethod(cls, client, data):
+                return cls.element(client, attr, data)
+        else:
+            def _defaultClassMethod(cls, client, data):
+                return cls.element(client, attr, data)
+        return MethodType(_defaultClassMethod, cls, cls.__metaclass__)
+
+
+def rollback(func):
+    def wrapper(cls, *args):
+        print "func=%s" % func.__name__
+        result = func(cls, *args)
+        rollback = {} if not result else \
+            cls._prepare_rollback(cls.delete, *args, **result)
+        return {'result': result, 'rollback': rollback}
+    return wrapper
+
+
 class Base(object):
+    __metaclass__ = DefaultClassMethods
+
     def __init__(self):
         self.exist = False
         self.rollback = None
@@ -86,39 +114,19 @@ class Base(object):
         keys = ['client', 'data']
         return dict(zip(keys, args))
 
-    def rollback(func):
-        #@functools.wraps(func)
-        def wrapper(cls, *args):
-            print "func=%s" % func.__name__
-            result = func(cls, *args)
-            rollback = {} if not result else \
-                cls._prepare_rollback(cls.delete, *args, **result)
-            return {'result': result, 'rollback': rollback}
-        return wrapper
-    rollback = staticmethod(rollback)
-
     @classmethod
-    def element(cls, client, action, data=None):
+    def element(cls, client, action, data):
         if not data:
             data = getattr(cls, 'data', None)
         # op is the combination of action and resource class name,
         # all ops should be defined in the templates
-        name = re.findall("[A-Z][^A-Z]*", cls.__class__.__name__)
-        #tpl_name = "_".join(name).upper()
+        name = re.findall("[A-Z][^A-Z]*", cls.__name__)
         op = "%s_%s" % (str(action).upper(), "_".join(name).upper())
         try:
             return client.request(op, **data)
         except api_ex.ApiException as e:
             Exinfo(e)
             raise e
-
-    @classmethod
-    def __getattr__(cls, action):
-        if str(action).upper() not in OPS:
-            raise AttributeError(action)
-        def wrapper(client, data):
-            return cls.element(client, action, data)
-        return wrapper
 
     def is_exist(self, client, **kwargs):
         response = client.request(self.method("get"), kwargs)
@@ -134,15 +142,6 @@ class Base(object):
 class Vdom(Base):
     def __init__(self):
         super(Vdom, self).__init__()
-
-    @Base.rollback
-    @classmethod
-    def add(cls, *args):
-        """
-        args is a tuple, its format is (api_client, {"key": value, })
-        """
-        return super(Vdom, cls).__getattr__('add')(*args)
-        #print "add() response = %s" % response
 
     @classmethod
     def _prepare_rollback(cls, func, *args, **result):
@@ -160,14 +159,6 @@ class Vdom(Base):
 class VlanInterface(Base):
     def __init__(self):
         super(VlanInterface, self).__init__()
-
-    @Base.rollback
-    def add(cls, *args):
-        """
-        args is a tuple, its format is (api_client, {"key": value, })
-        """
-        return super(VlanInterface, cls).__getattr__('add')(*args)
-        #print "add() response = %s" % response
 
     @classmethod
     def _prepare_rollback(cls, func, *args, **result):
@@ -188,15 +179,6 @@ class VlanInterface(Base):
 class RouterStatic(Base):
     def __init__(self):
         super(RouterStatic, self).__init__()
-
-    @Base.rollback
-    def add(self, *args):
-        """
-        args is a tuple, its format is (api_client, {"key": value, })
-        """
-        return super(RouterStatic, self).__getattr__('add')(*args)
-        #print "add() response = %s" % response
-
 
     def _prepare_rollback(self, func, *args, **result):
         if not func:
@@ -225,8 +207,6 @@ class FirewallPolicy(Base):
         }
 
 
-
-
 if __name__ == "__main__":
     from neutron.plugins.ml2.drivers.fortinet.api_client.client \
         import FortiosApiClient
@@ -239,19 +219,27 @@ if __name__ == "__main__":
     r = RouterStatic()
 
     data = {"vdom": "osvdm1"}
-    data_test = {"name": "os_tst1"}
+    data_test = {"name": "vdm_test"}
     data1 = {
         "vdom": "root",
         "dst": "10.16.37.0 255.255.255.0",
         "device": "port31",
         "gateway": "10.16.37.1"
     }
-    import ipdb;ipdb.set_trace()
-    Vdom.__getattr__('get')(cli, data_test)
-    print Vdom.get(cli, data_test)
+
+    #Vdom.__getattr__('get')(cli, data_test)
+    dom=Vdom.get(cli, data_test)
+    if dom:
+        print Vdom.delete(cli, data_test)
+    if not dom:
+        #import ipdb;ipdb.set_trace()
+        dom = Vdom.add(cli, data_test)
+
+        print dom['rollback']['func'](*dom['rollback']['params'])
+    print dom
     #a.get(cli)
     #print r.get(cli, data)
-    print r.add(cli, data1)
+    #print r.add(cli, data1)
 
 
 """

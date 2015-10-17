@@ -104,9 +104,8 @@ class Tasks(object):
             return
         while len(self._tasks):
             try:
-                if DEBUG:
-                    import ipdb;ipdb.set_trace()
                 subtask = self._tasks.pop()
+                import ipdb;ipdb.set_trace()
                 subtask['func'](*subtask['params'])
                 #print "### response = %s" % response
             except Exception as e:
