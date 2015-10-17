@@ -213,20 +213,20 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
     @classmethod
     def add_record(cls, context, **kwargs):
         session = get_session(context)
-        with session.begin(subtransactions=True):
-            record = cls.query(context, **kwargs)
-            if not record:
-                record = cls.query(context, allocated=False)
-                kwargs.setdefault('allocated', True)
-                kwargs.setdefault('inf_name_int_vdom', const.PREFIX["vint"] + \
-                                       str(record.vlan_id))
-                kwargs.setdefault('inf_name_ext_vdom', const.PREFIX["vext"] + \
-                                       str(record.vlan_id))
-                cls.update_record(context, record, **kwargs)
-                rollback = record._prepare_rollback(context, cls.delete_record,
-                                                 **kwargs)
-            else:
-                rollback = {}
+        #with session.begin(subtransactions=True):
+        record = cls.query(context, **kwargs)
+        if not record:
+            record = cls.query(context, allocated=False)
+            kwargs.setdefault('allocated', True)
+            kwargs.setdefault('inf_name_int_vdom', const.PREFIX["vint"] + \
+                                   str(record.vlan_id))
+            kwargs.setdefault('inf_name_ext_vdom', const.PREFIX["vext"] + \
+                                   str(record.vlan_id))
+            cls.update_record(context, record, **kwargs)
+            rollback = record._prepare_rollback(context, cls.delete_record,
+                                             **kwargs)
+        else:
+            rollback = {}
         ## need to check the attribute in the record whether updated
         ## # after update_record()
         return {'result': record, 'rollback': rollback}
@@ -236,10 +236,10 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
     def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
         session = get_session(context)
-        with session.begin(subtransactions=True):
-            record = cls.query(context, **kwargs)
-            if record:
-                cls.update(context, record, cls._set_null(**kwargs))
+        #with session.begin(subtransactions=True):
+        record = cls.query(context, **kwargs)
+        if record:
+            cls.update(context, record, cls._set_null(**kwargs))
         return record
 
 

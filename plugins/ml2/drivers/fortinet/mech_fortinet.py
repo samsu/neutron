@@ -264,6 +264,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             if vlink_ip:
                 ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
                 try:
+                    import ipdb; ipdb.set_trace()
                     self.op(context, resources.VlanInterface.get,
                             name=vlink_vlan.inf_name_ext_vdom,
                             vdom=const.EXT_VDOM)
@@ -278,9 +279,11 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                     self.op(context, resources.VlanInterface.get,
                             name=vlink_vlan.inf_name_int_vdom,
                             vdom=namespace.vdom)
+
+
                 except exception.ResourceNotFound:
                     self.op(context, resources.VlanInterface.add,
-                            name=vlink_vlan.inf_name_ext_vdom,
+                            name=vlink_vlan.inf_name_int_vdom,
                             vdom=namespace.vdom,
                             vlanid=vlink_vlan.vlan_id,
                             interface="npu0_vlink1",
