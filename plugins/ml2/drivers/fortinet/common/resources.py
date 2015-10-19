@@ -207,6 +207,22 @@ class FirewallPolicy(Base):
         }
 
 
+def op(self, client, context, func, **data):
+    res = func(client, data)
+    if res.get('rollback', {}):
+        self.task_manager.add(self._getid(context), **res['rollback'])
+    return res.get('result', res)
+
+def getid(context):
+    id = getattr(context, 'request_id', None)
+    if not id:
+        raise ValueError("not get request_id")
+    return id
+
+def getip(ipsubnet, place):
+    return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
+
+
 if __name__ == "__main__":
     from neutron.plugins.ml2.drivers.fortinet.api_client.client \
         import FortiosApiClient

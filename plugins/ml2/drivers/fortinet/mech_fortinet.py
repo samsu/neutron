@@ -264,7 +264,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             if vlink_ip:
                 ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
                 try:
-                    import ipdb; ipdb.set_trace()
+
                     self.op(context, resources.VlanInterface.get,
                             name=vlink_vlan.inf_name_ext_vdom,
                             vdom=const.EXT_VDOM)
@@ -280,7 +280,6 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                             name=vlink_vlan.inf_name_int_vdom,
                             vdom=namespace.vdom)
 
-
                 except exception.ResourceNotFound:
                     self.op(context, resources.VlanInterface.add,
                             name=vlink_vlan.inf_name_int_vdom,
@@ -290,7 +289,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                             ip=self._getip(ipsubnet, 2))
 
         except Exception as e:
-            self._rollback_on_err(context, e)
+            #self._rollback_on_err(context, e)
             raise e
         LOG.info(_("create network (precommit): "
                    "network type = %(network_type)s "
@@ -311,45 +310,40 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         # use network_id to get the network attributes
         # ONLY depend on our db for getting back network attributes
         # this is so we can replay postcommit from db
-        #context = mech_context._plugin_context
-        network_id = network['id']
-        #network_type = network['network_type']
+
+        #network_id = network['id']
+
         network_name = network["name"]
         tenant_id = network['tenant_id']
-        #vlan_id = network['vlan']
+
         segments = mech_context.network_segments
         # currently supports only one segment per network
         segment = segments[0]
-        network_type = segment['network_type']
+        #network_type = segment['network_type']
         vlan_id = segment['segmentation_id']
         context = mech_context._plugin_context
-        namespace = self.query_record(fortinet_db.Fortinet_ML2_Namespace,
-                                      context, tenant_id=tenant_id)
+        namespace = fortinet_db.query_record(
+            context, fortinet_db.Fortinet_ML2_Namespace, tenant_id=tenant_id)
+        inf_name = const.PREFIX["inf"] + str(vlan_id)
         try:
-            message = {
-                "name": const.PREFIX["inf"] + str(vlan_id),
-                "vlanid": vlan_id,
-                "interface": self._fortigate["int_interface"],
-                "vdom": namespace["vdom"],
-                "alias": network_name
-            }
-            LOG.debug(_("message = %s"), message)
-            self.add_dev_cnf(context, self._driver,
-                             resources.VlanInterface, **message)
-            #self._driver.request("ADD_VLAN_INTERFACE", **message)
+            import ipdb; ipdb.set_trace()
+            self.op(context, resources.VlanInterface.get,
+                    name=inf_name, vdom=namespace.vdom)
+
+        except exception.ResourceNotFound:
+            self.op(context, resources.VlanInterface.add,
+                    name=inf_name,
+                    vdom=namespace.vdom,
+                    vlanid=vlan_id,
+                    interface=self._fortigate["int_interface"],
+                    alias=network_name)
+
         except Exception as e:
             self._rollback_on_err(context, e)
             raise ml2_exc.MechanismDriverError(
                 _("Fortinet Mechanism: create_network_postcommmit failed"))
 
-        LOG.info(_("created network (postcommit): %(network_id)s"
-                   " of network type = %(network_type)s"
-                   " with vlan = %(vlan_id)s"
-                   " for tenant %(tenant_id)s"),
-                 {'network_id': network_id,
-                  'network_type': network_type,
-                  'vlan_id': vlan_id,
-                  'tenant_id': tenant_id})
+
 
     def delete_network_precommit(self, mech_context):
         """Delete Network from the plugin specific database table."""
