@@ -28,6 +28,7 @@ from neutron.openstack.common import importutils
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log as logging
 from neutron.db import models_v2
+from neutron.db.external_net_db import ExternalNetwork
 
 from neutron.db import api as db_api
 from neutron.common import constants as l3_constants
@@ -42,7 +43,8 @@ from neutron.plugins.ml2.drivers.fortinet.api_client import client
 from neutron.plugins.ml2.drivers.fortinet.api_client import exception
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 from neutron.plugins.ml2.drivers.fortinet.common import resources as resources
-from neutron.plugins.ml2.drivers.fortinet.tasks import constants as t_consts
+from neutron.plugins.ml2.drivers.fortinet.common import utils as utils
+
 from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
 
 from neutron.agent import securitygroups_rpc
@@ -151,6 +153,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         session = db_api.get_session()
         records = fortinet_db.query_records(cls, session)
         for record in records:
+            kwargs = {}
             for key in const.FORTINET_PARAMS[param]["keys"]:
                 _element = const.FORTINET_PARAMS[param]["type"](record[key])
                 if _element not in conf_list and not record.allocated:
@@ -189,6 +192,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             LOG.debug(_("!!!!!!! result %s param_range = %s" % (param, result)))
         return result if isinstance(result, list) else list(result)
 
+    """
     @staticmethod
     def _getid(context):
         id = getattr(context, 'request_id', None)
@@ -196,13 +200,6 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             raise ValueError("not get request_id")
         return id
 
-    def add_record(self, context, cls, **kwargs):
-        res = cls.add_record(context, **kwargs)
-        if res.get('rollback', {}):
-            self.task_manager.add(self._getid(context), **res['rollback'])
-        return res.get('result', None)
-
-    """
     def query_record(self, cls, context, **kwargs):
         return fortinet_db.cls.query(context, **kwargs)
 
@@ -210,18 +207,13 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         return fortinet_db.cls.query(context, **kwargs)
     """
 
-    def _rollback_on_err(self, context, e):
-        resources.Exinfo(e)
-        self.task_manager.update_status(self._getid(context),
-                                        t_consts.TaskStatus.ROLLBACK)
-
     """
     def add_dev_cnf(self, context, cls, **kwargs):
         if isinstance(cls, type):
             cls = cls()
         res = cls.add(self._driver, kwargs)
     """
-
+    """
     @staticmethod
     def _getip(ipsubnet, place):
         return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
@@ -231,119 +223,94 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if res.get('rollback', {}):
             self.task_manager.add(self._getid(context), **res['rollback'])
         return res.get('result', res)
+    """
 
     def create_network_precommit(self, mech_context):
         """Create Network in the mechanism specific database table."""
-        LOG.debug(_("++++++++++create_network_precommit+++++++++++++++++++++"))
-        network = mech_context.current
-        context = mech_context._plugin_context
-        tenant_id = network['tenant_id']
-        LOG.debug(_("!!!!!!! mech_context.current = %s" % mech_context.current))
-        LOG.debug(_("!!!!!!! context = %s" % context))
-        if network["router:external"]:
-            return
-        # currently supports only one segment per network
-        segment = mech_context.network_segments[0]
-        network_type = segment['network_type']
-        if network_type != 'vlan':
-            raise Exception(_("Fortinet Mechanism: failed to create network, "
-                              "only network type vlan is supported"))
-        try:
-            namespace = self.add_record(context,
-                                        fortinet_db.Fortinet_ML2_Namespace,
-                                        tenant_id=tenant_id)
-            self.op(context, resources.Vdom.add, name=namespace.vdom)
-
-            vlink_vlan = self.add_record(context,
-                            fortinet_db.Fortinet_Vlink_Vlan_Allocation,
-                            vdom=namespace.vdom)
-
-            vlink_ip = self.add_record(context,
-                            fortinet_db.Fortinet_Vlink_IP_Allocation,
-                            vdom=namespace.vdom, vlan_id=vlink_vlan.vlan_id)
-            if vlink_ip:
-                ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
-                try:
-
-                    self.op(context, resources.VlanInterface.get,
-                            name=vlink_vlan.inf_name_ext_vdom,
-                            vdom=const.EXT_VDOM)
-                except exception.ResourceNotFound:
-                    self.op(context, resources.VlanInterface.add,
-                            name=vlink_vlan.inf_name_ext_vdom,
-                            vdom=const.EXT_VDOM,
-                            vlanid=vlink_vlan.vlan_id,
-                            interface="npu0_vlink0",
-                            ip=self._getip(ipsubnet, 1))
-                try:
-                    self.op(context, resources.VlanInterface.get,
-                            name=vlink_vlan.inf_name_int_vdom,
-                            vdom=namespace.vdom)
-
-                except exception.ResourceNotFound:
-                    self.op(context, resources.VlanInterface.add,
-                            name=vlink_vlan.inf_name_int_vdom,
-                            vdom=namespace.vdom,
-                            vlanid=vlink_vlan.vlan_id,
-                            interface="npu0_vlink1",
-                            ip=self._getip(ipsubnet, 2))
-
-        except Exception as e:
-            #self._rollback_on_err(context, e)
-            raise e
-        LOG.info(_("create network (precommit): "
-                   "network type = %(network_type)s "
-                   "for tenant %(tenant_id)s"),
-                 {'network_type': network_type,
-                  'tenant_id': tenant_id})
-
+        pass
 
     def create_network_postcommit(self, mech_context):
-        """Create Network as a portprofile on the switch."""
-        LOG.debug(_("++++++++++create_network_postcommit+++++++++++++++++++++"))
-        LOG.debug(_("create_network_postcommit: called"))
+        """Create Network as a portprofile on the fortigate."""
         network = mech_context.current
-        LOG.debug(_("&&&&& mech_context.current = %s" % network))
         if network["router:external"]:
             # TODO
             return
         # use network_id to get the network attributes
         # ONLY depend on our db for getting back network attributes
         # this is so we can replay postcommit from db
-
-        #network_id = network['id']
-
         network_name = network["name"]
         tenant_id = network['tenant_id']
 
-        segments = mech_context.network_segments
+        segment = mech_context.network_segments[0]
         # currently supports only one segment per network
-        segment = segments[0]
-        #network_type = segment['network_type']
+        if segment['network_type'] != 'vlan':
+            raise Exception(_("Fortinet Mechanism: failed to create network,"
+                              "only network type vlan is supported"))
+
         vlan_id = segment['segmentation_id']
         context = mech_context._plugin_context
-        namespace = fortinet_db.query_record(
-            context, fortinet_db.Fortinet_ML2_Namespace, tenant_id=tenant_id)
-        inf_name = const.PREFIX["inf"] + str(vlan_id)
         try:
-            import ipdb; ipdb.set_trace()
-            self.op(context, resources.VlanInterface.get,
-                    name=inf_name, vdom=namespace.vdom)
+            import ipdb;ipdb.set_trace()
+            namespace = utils.add_record(self, context,
+                                         fortinet_db.Fortinet_ML2_Namespace,
+                                         tenant_id=tenant_id)
+            try:
+                utils.op(self, context, resources.Vdom.get,
+                         name=namespace.vdom)
+            except exception.ResourceNotFound:
+                utils.op(self, context, resources.Vdom.add,
+                         name=namespace.vdom)
 
-        except exception.ResourceNotFound:
-            self.op(context, resources.VlanInterface.add,
-                    name=inf_name,
-                    vdom=namespace.vdom,
-                    vlanid=vlan_id,
-                    interface=self._fortigate["int_interface"],
-                    alias=network_name)
+            vlink_vlan = utils.add_record(self, context,
+                                fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                                vdom=namespace.vdom)
+            vlink_ip = utils.add_record(self, context,
+                                fortinet_db.Fortinet_Vlink_IP_Allocation,
+                                vdom=namespace.vdom,
+                                vlan_id=vlink_vlan.vlan_id)
+            if vlink_ip:
+                ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
+                try:
+                    utils.op(self, context, resources.VlanInterface.get,
+                             name=vlink_vlan.inf_name_ext_vdom,
+                             vdom=const.EXT_VDOM)
+                except exception.ResourceNotFound:
+                    utils.op(self, context, resources.VlanInterface.add,
+                             name=vlink_vlan.inf_name_ext_vdom,
+                             vdom=const.EXT_VDOM,
+                             vlanid=vlink_vlan.vlan_id,
+                             interface="npu0_vlink0",
+                             ip=self._getip(ipsubnet, 1))
+                try:
+                    utils.op(self, context, resources.VlanInterface.get,
+                             name=vlink_vlan.inf_name_int_vdom,
+                             vdom=namespace.vdom)
+
+                except exception.ResourceNotFound:
+                    utils.op(self, context, resources.VlanInterface.add,
+                             name=vlink_vlan.inf_name_int_vdom,
+                             vdom=namespace.vdom,
+                             vlanid=vlink_vlan.vlan_id,
+                             interface="npu0_vlink1",
+                             ip=self._getip(ipsubnet, 2))
+
+            inf_name = const.PREFIX["inf"] + str(vlan_id)
+            try:
+                utils.op(self, context, resources.VlanInterface.get,
+                         name=inf_name, vdom=namespace.vdom)
+
+            except exception.ResourceNotFound:
+                utils.op(self, context, resources.VlanInterface.add,
+                         name=inf_name,
+                         vdom=namespace.vdom,
+                         vlanid=vlan_id,
+                         interface=self._fortigate["int_interface"],
+                         alias=network_name)
 
         except Exception as e:
-            self._rollback_on_err(context, e)
+            utils._rollback_on_err(self, context, e)
             raise ml2_exc.MechanismDriverError(
                 _("Fortinet Mechanism: create_network_postcommmit failed"))
-
-
 
     def delete_network_precommit(self, mech_context):
         """Delete Network from the plugin specific database table."""
@@ -352,30 +319,22 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         network = mech_context.current
         network_id = network['id']
         context = mech_context._plugin_context
-        ext_network = fortinet_db.get_ext_network(context, network_id)
-        if ext_network:
+        if fortinet_db.query_record(context, ExternalNetwork,
+                                    network_id=network_id):
             return
 
         tenant_id = network['tenant_id']
+        namespace = fortinet_db.query_record(context,
+                                    fortinet_db.Fortinet_ML2_Namespace,
+                                    tenant_id=tenant_id)
         vlan_id = network['provider:segmentation_id']
+        inf_name = const.PREFIX["inf"] + str(vlan_id)
         try:
-            message = {
-                "name": const.PREFIX["inf"] + str(vlan_id)
-            }
-            self._driver.request("DELETE_VLAN_INTERFACE", **message)
-
-        except Exception:
-            LOG.exception(
-                _("Fortinet Mechanism: failed to delete network in db"))
-            raise Exception(
-                _("Fortinet Mechanism: delete_network_precommit failed"))
-
-        LOG.info(_("delete network (precommit): %(network_id)s"
-                   " with vlan = %(vlan_id)s"
-                   " for tenant %(tenant_id)s"),
-                 {'network_id': network_id,
-                  'vlan_id': vlan_id,
-                  'tenant_id': tenant_id})
+            utils.op(self, context, resources.VlanInterface.delete,
+                     name=inf_name,
+                     vdom=namespace.vdom)
+        except Exception as e:
+            resources.Exinfo(e)
 
 
     def delete_network_postcommit(self, mech_context):
@@ -386,11 +345,12 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         network = mech_context.current
         network_id = network['id']
         context = mech_context._plugin_context
-        ext_network = fortinet_db.get_ext_network(context, network_id)
-        if ext_network:
+        if fortinet_db.query_record(context, ExternalNetwork,
+                                    network_id=network_id):
             return
         tenant_id = network['tenant_id']
-        if not fortinet_db.tenant_network_count(context, tenant_id):
+        if not fortinet_db.query_count(models_v2.Network, context,
+                                       tenant_id=tenant_id):
             try:
                 self.fortinet_delete_vlink(context, tenant_id)
                 namespace = fortinet_db.get_namespace(context, tenant_id)
@@ -1463,39 +1423,50 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
 
     def fortinet_delete_vlink(self, context, tenant_id):
-        session = context.session
-        vdom = fortinet_db.get_namespace(context, tenant_id)
-        vlink_vlan = {
-            "vdom": vdom,
-            "allocated": True
-        }
-        vlink_vlan_allocation = fortinet_db.get_record(session,
-                                    fortinet_db.Fortinet_Vlink_Vlan_Allocation,
-                                    **vlink_vlan)
-        if not vlink_vlan_allocation:
+
+        vdom = fortinet_db.query_record(context,
+                                        fortinet_db.Fortinet_ML2_Namespace,
+                                       tenant_id=tenant_id).vdom
+        vlink_vlan = fortinet_db.query_record(context,
+                                fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                                vdom=vdom,
+                                allocated=True)
+
+        if not vlink_vlan:
             return False
-        vlink_ip = {
-            "vdom": vdom,
-            "vlan_id": vlink_vlan_allocation.vlanid,
-            "allocated": True
-        }
-        vlink_ip_allocation = fortinet_db.get_record(session,
+
+        vlink_ip = fortinet_db.query_record(context,
                                   fortinet_db.Fortinet_Vlink_IP_Allocation,
-                                  **vlink_ip)
-        if not vlink_ip_allocation:
+                                  vdom=vdom,
+                                  vlan_id=vlink_vlan.vlanid,
+                                  allocated=True)
+        if not vlink_ip:
             return False
         try:
-            message = {
-                "name": vlink_vlan_allocation.inf_name_ext_vdom
-            }
-            self._driver.request("DELETE_VLAN_INTERFACE", **message)
-            message = {
-                "name": vlink_vlan_allocation.inf_name_int_vdom
-            }
-            self._driver.request("DELETE_VLAN_INTERFACE", **message)
-            self.fortinet_reset_vlink(context,
-                                 vlink_vlan_allocation,
-                                 vlink_ip_allocation)
+            utils.op(self, context, resources.VlanInterface.delete,
+                             name=vlink_vlan.inf_name_ext_vdom,
+                             vdom=const.EXT_VDOM)
+        except exception.ResourceNotFound:
+            LOG.exception(_("The vdom link %(vlink)s in the %(vdom)s "
+                            "already was deleted.") %
+                          ({'vlink': vlink_vlan.inf_name_ext_vdom,
+                            'vdom':const.EXT_VDOM}))
+        try:
+            utils.op(self, context, resources.VlanInterface.delete,
+                             name=vlink_vlan.inf_name_int_vdom,
+                             vdom=vdom)
+        except exception.ResourceNotFound:
+            LOG.exception(_("The vdom link %(vlink)s in the %(vdom)s "
+                            "already was deleted.") %
+                          ({'vlink': vlink_vlan.inf_name_ext_vdom,
+                            'vdom':const.EXT_VDOM}))
+        try:
+            fortinet_db.Fortinet_Vlink_Vlan_Allocation.delete_record(context,
+                                                                     vdom=vdom)
+
+            fortinet_db.Fortinet_Vlink_IP_Allocation.delete_record(context,
+                                                                   vdom=vdom)
+
         except:
             LOG.error(_("Failed to delete vlink"))
             raise Exception(_("Failed to delete vlink"))

@@ -207,20 +207,6 @@ class FirewallPolicy(Base):
         }
 
 
-def op(self, client, context, func, **data):
-    res = func(client, data)
-    if res.get('rollback', {}):
-        self.task_manager.add(self._getid(context), **res['rollback'])
-    return res.get('result', res)
-
-def getid(context):
-    id = getattr(context, 'request_id', None)
-    if not id:
-        raise ValueError("not get request_id")
-    return id
-
-def getip(ipsubnet, place):
-    return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
 
 
 if __name__ == "__main__":
@@ -242,10 +228,11 @@ if __name__ == "__main__":
         "device": "port31",
         "gateway": "10.16.37.1"
     }
-
+    dom = False
     #Vdom.__getattr__('get')(cli, data_test)
-    dom=Vdom.get(cli, data_test)
-    if dom:
+    #dom=Vdom.get(cli, data_test)
+    if not dom:
+        import ipdb; ipdb.set_trace()
         print Vdom.delete(cli, data_test)
     if not dom:
         #import ipdb;ipdb.set_trace()
