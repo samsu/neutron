@@ -151,14 +151,14 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         cls = getattr(fortinet_db, const.FORTINET_PARAMS[param]["cls"])
         conf_list = self.get_range(param)
         session = db_api.get_session()
-        records = fortinet_db.query_records(cls, session)
+        records = fortinet_db.query_records(session, cls)
         for record in records:
             kwargs = {}
             for key in const.FORTINET_PARAMS[param]["keys"]:
                 _element = const.FORTINET_PARAMS[param]["type"](record[key])
                 if _element not in conf_list and not record.allocated:
                     kwargs.setdefault(key, record[key])
-                    fortinet_db.delete_record(cls, session, **kwargs)
+                    fortinet_db.delete_record(session, cls, **kwargs)
         try:
             for i in range(0, len(conf_list),
                            len(const.FORTINET_PARAMS[param]["keys"])):
