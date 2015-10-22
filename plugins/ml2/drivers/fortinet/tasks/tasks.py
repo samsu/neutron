@@ -400,6 +400,7 @@ if __name__ == "__main__":
         import FortiosApiClient
     from neutron.plugins.ml2.drivers.fortinet.common.resources import *
     from neutron.plugins.ml2.drivers.fortinet.db import models as fortinet_db
+    from neutron.db.models_v2 import Network as Network
     context = Context()
     DEBUG = False
     try:
@@ -414,6 +415,7 @@ if __name__ == "__main__":
         user = "admin"
         password = ""
         cli = FortiosApiClient(api, user, password)
+        import ipdb; ipdb.set_trace()
 
         a = FirewallPolicy()
         r = RouterStatic()
@@ -441,7 +443,7 @@ if __name__ == "__main__":
         dbr = fortinet_db.Fortinet_Static_Router()
         db_rollback = {
             'params': (context, record),
-            'func': dbr.delete
+            'func': dbr.delete_record
         }
 
         t = Tasks(id)
@@ -449,11 +451,11 @@ if __name__ == "__main__":
         tm.add(id, **db_rollback)
         params1 = (context, record)
 
-        res = dbr.add(*params1)
+        res = dbr.add_record(*params1)
         print "# Fortinet_Static_Router = %s\n" % res
         context.session.commit()
         params = (cli, data0)
-        import ipdb; ipdb.set_trace()
+
         tm.update_status(id, constants.TaskStatus.ROLLBACK)
         context.session.commit()
         """

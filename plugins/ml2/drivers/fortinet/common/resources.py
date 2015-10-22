@@ -115,6 +115,18 @@ class Base(object):
         return dict(zip(keys, args))
 
     @classmethod
+    def _prepare_rollback(cls, func, *args, **result):
+        if not func:
+            return None
+        params = cls.params_decoded(*args)
+        data = cls._rollback_data(params['data'])
+        rollback = {
+            'func': func,
+            'params': (params['client'], data)
+        }
+        return rollback
+
+    @classmethod
     def element(cls, client, action, data):
         if not data:
             data = getattr(cls, 'data', None)
@@ -144,6 +156,10 @@ class Vdom(Base):
         super(Vdom, self).__init__()
 
     @classmethod
+    def _rollback_data(data):
+        return {'name': data.get('name')}
+
+    """
     def _prepare_rollback(cls, func, *args, **result):
         if not func:
             return None
@@ -154,13 +170,20 @@ class Vdom(Base):
             'params': (params['client'], data)
         }
         return rollback
-
+    """
 
 class VlanInterface(Base):
     def __init__(self):
         super(VlanInterface, self).__init__()
 
     @classmethod
+    def _rollback_data(data):
+        return {
+            'vdom': data.get('vdom'),
+            'name': data.get('name')
+        }
+
+    """
     def _prepare_rollback(cls, func, *args, **result):
         if not func:
             return None
@@ -174,16 +197,37 @@ class VlanInterface(Base):
             'params': (params['client'], data)
         }
         return rollback
+    """
 
 
 class RouterStatic(Base):
     def __init__(self):
         super(RouterStatic, self).__init__()
 
-    def _prepare_rollback(self, func, *args, **result):
+    @classmethod
+    def _prepare_rollback(cls, func, *args, **result):
         if not func:
             return None
-        params = self.params_decoded(*args)
+        params = cls.params_decoded(*args)
+        data = {
+            'vdom': params['data']['vdom'],
+            'id': result['results']['mkey']
+        }
+        rollback = {
+            'func': func,
+            'params': (params['client'], data)
+        }
+        return rollback
+
+class FirewallIppool(Base):
+    def __init__(self):
+        super(FirewallIppool, self).__init__()
+
+    @classmethod
+    def _prepare_rollback(cls, func, *args, **result):
+        if not func:
+            return None
+        params = cls.params_decoded(*args)
         data = {
             'vdom': params['data']['vdom'],
             'id': result['results']['mkey']
@@ -206,7 +250,24 @@ class FirewallPolicy(Base):
             "dstaddr": "all"
         }
 
+class DhcpServer(Base):
+    def __init__(self):
+        super(DhcpServer, self).__init__()
 
+    @classmethod
+    def _prepare_rollback(cls, func, *args, **result):
+        if not func:
+            return None
+        params = cls.params_decoded(*args)
+        data = {
+            'vdom': params['data']['vdom'],
+            'id': result['results']['mkey']
+        }
+        rollback = {
+            'func': func,
+            'params': (params['client'], data)
+        }
+        return rollback
 
 
 if __name__ == "__main__":

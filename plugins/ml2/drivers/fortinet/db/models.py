@@ -60,6 +60,8 @@ def db_query(cls, context, **kwargs):
     """Get a filtered vlink_vlan_allocation record."""
     session = get_session(context)
     LOG.debug(_("##### kwargs = %s" % kwargs))
+    #if cls.__tablename__ == 'networks':
+    #    import ipdb; ipdb.set_trace()
     query = session.query(cls)
     for key, value in kwargs.iteritems():
         kw = {key: value}
@@ -226,9 +228,9 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
                                    str(record.vlan_id))
             kwargs.setdefault('inf_name_ext_vdom', const.PREFIX["vext"] + \
                                    str(record.vlan_id))
-            cls.update_record(context, record, **kwargs)
+            record.update_record(context, record, **kwargs)
             rollback = record._prepare_rollback(context, cls.delete_record,
-                                             **kwargs)
+                                             kwargs)
         else:
             rollback = {}
         ## need to check the attribute in the record whether updated
@@ -240,10 +242,10 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
     def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
         session = get_session(context)
-        #with session.begin(subtransactions=True):
-        record = cls.query(context, **kwargs)
-        if record:
-            cls.update(context, record, cls.reset())
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if record:
+                record.update_record(context, record, **cls.reset())
         return record
 
 
@@ -273,10 +275,10 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
             if not record:
                 record = cls.query(context, allocated=False)
                 kwargs.setdefault('allocated', True)
-                cls.update_record(context, record, **kwargs)
+                record.update_record(context, record, **kwargs)
                 rollback = record._prepare_rollback(context,
                                                     cls.delete_record,
-                                                    **kwargs)
+                                                    kwargs)
             else:
                 rollback = {}
         ## need to check the attribute in the record whether updated
@@ -291,9 +293,8 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
         with session.begin(subtransactions=True):
             record = cls.query(context, **kwargs)
             if record:
-                record.update(context, record, cls.reset())
+                record.update_record(context, record, **cls.reset())
         return record
-
 
 class Fortinet_Firewall_Policy(model_base.BASEV2, DBbase):
     """Schema for Fortinet firewall policy."""
