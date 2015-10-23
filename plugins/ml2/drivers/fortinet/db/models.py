@@ -171,7 +171,6 @@ class Fortinet_ML2_Namespace(model_base.BASEV2, DBbase):
         if not getattr(record, 'vdom'):
             vdom = const.PREFIX['vdom'] + str(record.id)
             self.update_record(context, record, vdom=vdom)
-            print "## query result: %s", self.query(context, vdom=vdom)
         return record.vdom
 
 class Fortinet_ML2_Subnet(model_base.BASEV2, DBbase):
@@ -189,6 +188,24 @@ class Fortinet_ML2_ReservedIP(model_base.BASEV2, DBbase):
     ip = sa.Column(sa.String(32))
     vdom = sa.Column(sa.String(11))
     edit_id = sa.Column(sa.Integer)
+
+    @classmethod
+    def add_record(cls, context, **kwargs):
+        #import ipdb;ipdb.set_trace()
+        res = super(Fortinet_ML2_ReservedIP, cls).add_record(context, **kwargs)
+        if res.get('rollback'):
+            cls._allocate_edit_id(context, res['result'])
+        return res
+
+    @classmethod
+    def _allocate_edit_id(cls, context, record):
+        if not getattr(record, 'edit_id'):
+            last_record = db_query(cls, context, subnet_id=record.subnet_id).\
+                                      order_by(cls.edit_id.desc()).first()
+            edit_id = last_record.edit_id + 1 if last_record else 1
+            record.update_record(context, record, edit_id=edit_id)
+        return record.edit_id
+
 
 class Fortinet_Static_Router(model_base.BASEV2, DBbase):
     """Schema for Fortinet static router."""

@@ -62,6 +62,141 @@ def fortinet_add_vdom(obj, context, **kwargs):
     return namespace
 
 
+def add_fwippool(obj, context, **kwargs):
+    record = add_record(obj, context,
+                        fortinet_db.Fortinet_Firewall_IPPool, **kwargs)
+    try:
+        op(obj, context, resources.FirewallIppool.get,
+           vdom=record.vdom, name=record.name)
+    except exception.ResourceNotFound:
+        op(obj, context, resources.FirewallIppool.add, **kwargs)
+    return record
+
+def add_fwpolicy(obj, context, **kwargs):
+    record = add_record(obj, context,
+                        fortinet_db.Fortinet_Firewall_Policy, **kwargs)
+    if getattr(record, 'edit_id'):
+        try:
+            op(obj, context, resources.FirewallIppool.get,
+               vdom=record.vdom, id=record.edit_id)
+            return record
+        except exception.ResourceNotFound:
+            pass
+    res = op(obj, context, resources.Fortinet_Firewall_Policy.add, **kwargs)
+    record.update(context, record, edit_id=res['mkey'])
+    return record
+
+def add_resource(obj, context, cls, resource, **kwargs):
+    #cls = fortinet_db.Fortinet_Firewall_Address
+    record = add_record(obj, context, cls, **kwargs)
+    if record:
+        try:
+            op(obj, context, resource.get, vdom=record.vdom, name=record.name)
+        except exception.ResourceNotFound:
+            op(obj, context, resource.add, **kwargs)
+    return record
+
+def delete_resource(obj, context, cls, resource, **kwargs):
+    record = fortinet_db.query_record(context, cls, **kwargs)
+    if record:
+        try:
+            op(obj, context, resource.get, vdom=record.vdom, name=record.name)
+            op(obj, context, resource.delete,
+               vdom=record.vdom, name=record.name)
+        except exception.ResourceNotFound:
+            pass
+    return fortinet_db.delete_record(context, cls, **kwargs)
+
+
+
+
+
+def add_addrgrp(obj, context, **kwargs):
+    """
+    :param context:
+    :param kwargs:
+     {
+        "name": "addrgrp_osvdm1",
+        "vdom": "osvdm1",
+        "members": ["192.168.33.0"]
+     }
+    :return:
+    """
+    for name in kwargs['members']:
+        record = fortinet_db.query_record(context,
+                                    fortinet_db.Fortinet_Firewall_Address,
+                                    name=name,
+                                    vdom=kwargs['vdom'])
+        if not record.group:
+            record.update_record(context, record, group=kwargs['name'])
+            # TODO: need to add a rollback action to taskmanager
+        else:
+            LOG.debug(_("The member %(record)s already joined a group"),
+                      {"record": record})
+    try:
+        op(obj, context, resources.FirewallAddrgrp.get,
+           name=kwargs['name'], vdom=kwargs['vdom'])
+        # TODO: need to add a rollback action to taskmanager
+        op(obj, context, resources.FirewallAddrgrp.set, **kwargs)
+    except exception.ResourceNotFound:
+        op(obj, context, resources.FirewallAddrgrp.add, **kwargs)
+
+
+
+def add_member_addrgrp(obj, context, **kwargs):
+    """
+    :param context: for database
+    :param kwargs:
+        example format
+        {
+            "name": "osvdm1_net",
+            "vdom": "osvdm1",
+            "members": ["192.168.10.0", "192.168.33.0"]
+        }
+        each member of members is the address name to be added in
+        the specific firewall address group in FGT.
+    """
+
+    cls = fortinet_db.Fortinet_Firewall_Address
+    if not kwargs.get("members", None) and not kwargs.get("name", None):
+        LOG.debug(_("### there is no member and no group name"))
+        return
+
+    records = fortinet_db.query_records(context,
+                                        fortinet_db.Fortinet_Firewall_Address,
+                                        group=kwargs['name'])
+    #records = fortinet_db.get_records(session, cls, group=kwargs["name"])
+
+    if not records:
+        self.add_addrgrp(context, **kwargs)
+    else:
+        try:
+            for name in kwargs["members"]:
+                addrinfo = {
+                    "name": name,
+                    "vdom": kwargs["vdom"]
+                }
+                record = fortinet_db.get_record(session, cls, **addrinfo)
+                if not record.group:
+                    addrinfo.setdefault("group", kwargs["name"])
+                    fortinet_db.update_record(context, record, **addrinfo)
+                else:
+                    LOG.debug(_("### The memeber %(member)s "
+                                "is already joined a group"),
+                              {"member": record})
+            for record in records:
+                kwargs["members"].append(record.name)
+            if kwargs.has_key("vdom"):
+                kwargs.setdefault("vdom", kwargs["vdom"])
+                del kwargs["vdom"]
+            self._driver.request("SET_FIREWALL_ADDRGRP", **kwargs)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+        LOG.error(_("### Exception= %s" % Exception))
+
+
+
+
 def fortinet_add_vlink(obj, context, vdom):
     vlink_vlan = add_record(obj, context,
                         fortinet_db.Fortinet_Vlink_Vlan_Allocation,

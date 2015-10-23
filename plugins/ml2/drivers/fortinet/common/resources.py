@@ -24,7 +24,7 @@ from types import MethodType
 from neutron.openstack.common import log as logging
 from neutron.plugins.ml2.drivers.fortinet.api_client \
     import exception as api_ex
-
+from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 
 LOG = logging.getLogger(__name__)
 
@@ -116,6 +116,13 @@ class Base(object):
         }
         return rollback
 
+    @classmethod
+    def _rollback_data(cls, params, **result):
+        return {
+            'vdom': params['data'].get('vdom', const.EXT_VDOM),
+            'name': params['data']['name']
+        }
+
 
     @classmethod
     def element(cls, client, action, data):
@@ -155,13 +162,6 @@ class VlanInterface(Base):
     def __init__(self):
         super(VlanInterface, self).__init__()
 
-    @classmethod
-    def _rollback_data(cls, params, **result):
-        return {
-            'vdom': params['data'].get('vdom'),
-            'name': params['data'].get('name')
-        }
-
 
 class RouterStatic(Base):
     def __init__(self):
@@ -178,14 +178,6 @@ class FirewallIppool(Base):
     def __init__(self):
         super(FirewallIppool, self).__init__()
 
-    @classmethod
-    def _rollback_data(cls, params, **result):
-        return {
-            'vdom': params['data']['vdom'],
-            'name': params['data']['name'],
-        }
-
-
 class FirewallPolicy(Base):
     def __init__(self):
         super(FirewallPolicy, self).__init__()
@@ -196,6 +188,15 @@ class FirewallPolicy(Base):
             'vdom': params['data']['vdom'],
             'id': result['results']['mkey']
         }
+
+class FirewallAddress(Base):
+    def __init__(self):
+        super(FirewallAddress, self).__init__()
+
+
+class FirewallAddrgrp(Base):
+    def __init__(self):
+        super(FirewallAddrgrp, self).__init__()
 
 
 class DhcpServer(Base):
