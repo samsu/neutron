@@ -228,30 +228,6 @@ GET_DHCP_SERVER = """
 }
 """
 
-## api not supported yet, abandoned
-_SET_DHCP_SERVER_RSV_ADDR_ = """
-{
-    "path":"/api/v2/cmdb/system.dhcp/server/1/",
-    "method": "POST",
-    "body": {
-        #if $varExists('vdom')
-        "vdom": "$vdom",
-        #end if
-        "json": {
-            "id": $id,
-            "reserved-address":[
-                {
-                    #if $varExists('rid')
-                    "id": "$rid",
-                    #end if
-                    "ip":"$ip",
-                    "mac":"$mac"
-                }
-            ]
-        }
-    }
-}
-"""
 
 SET_DHCP_SERVER_RSV_ADDR = """
 {

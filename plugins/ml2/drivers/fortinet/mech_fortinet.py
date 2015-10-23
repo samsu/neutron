@@ -28,6 +28,7 @@ from neutron.openstack.common import importutils
 from neutron.openstack.common import excutils
 from neutron.openstack.common import log as logging
 from neutron.db import models_v2
+from neutron.db import l3_db
 from neutron.db.external_net_db import ExternalNetwork
 
 from neutron.db import api as db_api
@@ -226,8 +227,20 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             except exception.ResourceNotFound:
                 utils.op(self, context, resources.Vdom.add,
                          name=namespace.vdom)
-            utils.fortinet_add_vlink(self, context, namespace.vdom,
-                                     vlan_id, network_name)
+
+            utils.fortinet_add_vlink(self, context, namespace.vdom)
+
+            inf_name = const.PREFIX["inf"] + str(vlan_id)
+            try:
+                utils.op(self, context, resources.VlanInterface.get,
+                         name=inf_name, vdom=namespace.vdom)
+            except exception.ResourceNotFound:
+                utils.op(self, context, resources.VlanInterface.add,
+                         name=inf_name,
+                         vdom=namespace.vdom,
+                         vlanid=vlan_id,
+                         interface=self._fortigate["int_interface"],
+                         alias=network_name)
         except Exception as e:
             utils._rollback_on_err(self, context, e)
             raise ml2_exc.MechanismDriverError(
@@ -457,11 +470,11 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                                              id=subnet_id)
 
         #subnet = fortinet_db.get_record(session, models_v2.Subnet, **kwargs)
-        LOG.debug(_("!!!!! subnet = %s" % subnet))
+        #LOG.debug(_("!!!!! subnet = %s" % subnet_db))
         LOG.debug(_("!!!!! port['device_owner'] = %s" % port["device_owner"]))
         if port["device_owner"] in ["network:router_gateway"]:
             if fortinet_db.query_record(context, ExternalNetwork,
-                                        network_id=port["network_id"]):
+                                        network_id=port['network_id']):
             #if fortinet_db.get_ext_network(context, port["network_id"]):
                 #add ippool and its related firewall policy
                 self._set_ext_gw(context, port)
@@ -657,48 +670,66 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         }
         :return:
         """
-        session = context.session
-        kwargs = {}
-        router = fortinet_db.get_router(context, port["device_id"])
-        tenant_id = router.get("tenant_id", None)
+        router_db = fortinet_db.query_record(context, l3_db.Router,
+                                             id=port["device_id"])
+
+        #router = fortinet_db.get_router(context, port["device_id"])
+        tenant_id = router_db.get("tenant_id", None)
         if not tenant_id:
             raise ValueError
-        namespace = fortinet_db.get_namespace(context, tenant_id)
-        LOG.debug(_("!!!!! namespace = %s" % namespace))
+        namespace = fortinet_db.query_record(context,
+                                        fortinet_db.Fortinet_ML2_Namespace,
+                                        tenant_id=tenant_id)
         if not namespace:
-            namespace = self.add_namespace(context, tenant_id)
-        kwargs["vdom"] = namespace.vdom
-        LOG.debug(_("##### kwargs = %s" % kwargs))
-        LOG.debug(_("##### port = %s" % port))
-        cls = fortinet_db.Fortinet_Vlink_Vlan_Allocation
-        vlink = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("##### vlink = %s" % vlink))
+            namespace = utils.fortinet_add_vdom(self, context,
+                                                tenant_id=tenant_id)
+        vlink_db = fortinet_db.query_record(context,
+                                    fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                                    vdom=namespace.vdom)
+        if not vlink_db:
+            utils.fortinet_add_vlink(self, context, namespace.vdom)
+            vlink_db = fortinet_db.query_record(context,
+                                    fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                                    vdom=namespace.vdom)
 
-        if not vlink:
-            self.fortinet_add_vlink(context, tenant_id)
-            vlink = fortinet_db.get_record(session, cls, **kwargs)
-            LOG.debug(_("##### vlink = %s" % vlink))
         ip_address = port["fixed_ips"][0]["ip_address"]
         try:
-            self._add_ippool(ip_address)
-            kwargs = {
-                "vdom": const.EXT_VDOM,
-                "srcintf": vlink.inf_name_ext_vdom,
-                "dstintf": self._fortigate["ext_interface"],
-                "poolname": ip_address
-            }
-            self._add_firewall_policy(context, **kwargs)
+            utils.op(self, context, resources.FirewallIppool.add,
+                     vdom=const.EXT_VDOM,
+                     name=ip_address,
+                     startip=ip_address)
 
-            netmask = self._get_subnet_netmask(context,
-                                port["fixed_ips"][0]["subnet_id"])
+            #self._add_ippool(ip_address)
+            utils.op(self, context, resources.FirewallPolicy.add,
+                     vdom=const.EXT_VDOM,
+                     srcintf=vlink_db.inf_name_ext_vdom,
+                     dstintf=self._fortigate["ext_interface"],
+                     poolname=ip_address)
+
+            #self._add_firewall_policy(context, **kwargs)
+            subnet_db = fortinet_db.query_record(context, models_v2.Subnet,
+                                        id=port['fixed_ips'][0]['subnet_id'])
+            if subnet_db:
+                netmask = netaddr.IPNetwork(subnet_db.cidr).netmask
+
+
+            #netmask = self._get_subnet_netmask(context,
+            #                                   port['fixed_ips'][0]['subnet_id'])
                 # add subip
-            kwargs = {
-                "name": self._fortigate["ext_interface"],
-                "vdom": const.EXT_VDOM,
-                "ip": ip_address,
-                "netmask": str(netmask)
-            }
-            LOG.debug(_("#### kwargs=%s" % kwargs))
+                kwargs = {
+                    "name": self._fortigate["ext_interface"],
+                    "vdom": const.EXT_VDOM,
+                    "ip": ip_address,
+                    "netmask": str(netmask)
+                }
+                LOG.debug(_("#### kwargs=%s" % kwargs))
+
+                inf_db = fortinet_db.query_record(context,
+                                        fortinet_db.Fortinet_Interface,
+                                        name=self._fortigate["ext_interface"])
+                if const.EXT_DEF_DST in inf_db.ip:
+
+
             if self._is_null_ip(context, kwargs["name"]):
                 self._add_interface_subip(context, **kwargs)
             else:
@@ -928,6 +959,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     def _get_subnet_netmask(context, subnet_id):
         session = context.session
         cls = models_v2.Subnet
+
         record = fortinet_db.get_record(session, cls, id=subnet_id)
         if record:
             return netaddr.IPNetwork(record.cidr).netmask
@@ -939,6 +971,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     def _is_null_ip(context, interface):
         session = context.session
         cls = fortinet_db.Fortinet_Interface
+
         record = fortinet_db.get_record(session, cls, name=interface)
         if record:
             if const.EXT_DEF_DST in record.ip:
@@ -968,6 +1001,8 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 "vdom": const.EXT_VDOM
             }
             ip = "%s %s" % (ip_address, netmask)
+
+
             cls = fortinet_db.Fortinet_Interface
             record = fortinet_db.get_record(session, cls, **kwargs)
             kwargs.setdefault("ip", ip)
@@ -1003,6 +1038,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         interface = fortinet_db.get_record(session, cls, **kwargs)
         if const.EXT_DEF_DST == getattr(interface, "ip"):
             try:
+
                 res = self._driver.request("SET_VLAN_INTERFACE", **update_inf)
                 if 200 == res["http_status"]:
                     if update_inf.has_key("vdom"):

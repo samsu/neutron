@@ -111,30 +111,23 @@ class ApiRequest(object):
                     conn.sock.settimeout(self._http_timeout)
 
                 headers = copy.copy(self._headers)
-                LOG.debug(_("##### headers=%s" % headers))
 
                 if templates.RELOGIN in url:
                     url = json.loads(templates.LOGIN)['path']
-                    LOG.debug(_("##### url=%s" % url))
-                    LOG.debug(_("##### self._url=%s" % self._url))
                     conn.connect()
                     self._api_client._wait_for_login(conn, headers)
                     url = self._url
-                    #cookie = self._api_client.auth_cookie(conn)
 
                 cookie = self._api_client.auth_cookie(conn)
-                LOG.debug(_("##### cookie=%s" % cookie))
 
                 if self._url != json.loads(templates.LOGIN)['path'] and cookie:
                     headers["Cookie"] = cookie["Cookie"]
                     headers["X-CSRFTOKEN"] = cookie["X-CSRFTOKEN"]
-                    LOG.debug(_("##### headers=%s" % headers))
 
                 try:
                     if self._body:
                         if self._url == json.loads(templates.LOGIN)['path']:
                             body = urllib.urlencode(self._body)
-                            LOG.debug(_("##### headers=%s" % headers))
                         else:
                             body = json.dumps(self._body)
                     else:
@@ -144,11 +137,6 @@ class ApiRequest(object):
                                 "url=%(url)s, body=%(body)s, headers=%(headers)s"),
                                  {'method': self._method, "url": url,
                                   "body": body, "headers": headers})
-                    #print "####### issuing request:"
-                    #print "## self._method = %s" % self._method
-                    #print "## url = %s" % url
-                    #print "## headers = %s" % headers
-                    #print "## body = %s" % body
 
                     conn.request(self._method, url, body, headers)
                 except Exception as e:
@@ -171,9 +159,8 @@ class ApiRequest(object):
                            'elapsed': elapsed_time,
                            'response.headers': response.headers,
                            'response.body': response.body})
-                #ipdb.set_trace()
+
                 if response.status in (httplib.UNAUTHORIZED, httplib.FOUND):
-                    LOG.debug("cookie=%s" % cookie)
                     if cookie is None and \
                        self._url != json.loads(templates.LOGIN)['path']:
                         # The connection still has no valid cookie despite

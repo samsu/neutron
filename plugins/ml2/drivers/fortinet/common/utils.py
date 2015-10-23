@@ -52,54 +52,52 @@ def _rollback_on_err(obj, context, err):
     resources.Exinfo(err)
 
 
-def fortinet_add_vlink(cls, context, vdom, vlan_id, network_name):
-    vlink_vlan = add_record(cls, context,
+def fortinet_add_vdom(obj, context, **kwargs):
+    namespace = add_record(obj, context, fortinet_db.Fortinet_ML2_Namespace,
+                           **kwargs)
+    try:
+        op(obj, context, resources.Vdom.get, name=namespace.vdom)
+    except exception.ResourceNotFound:
+        op(obj, context, resources.Vdom.add, name=namespace.vdom)
+    return namespace
+
+
+def fortinet_add_vlink(obj, context, vdom):
+    vlink_vlan = add_record(obj, context,
                         fortinet_db.Fortinet_Vlink_Vlan_Allocation,
                         vdom=vdom)
-    vlink_ip = add_record(cls, context,
+    vlink_ip = add_record(obj, context,
                         fortinet_db.Fortinet_Vlink_IP_Allocation,
                         vdom=vdom,
                         vlan_id=vlink_vlan.vlan_id)
     if vlink_ip:
         ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
         try:
-            op(cls, context, resources.VlanInterface.get,
+            op(obj, context, resources.VlanInterface.get,
                      name=vlink_vlan.inf_name_ext_vdom,
                      vdom=const.EXT_VDOM)
         except exception.ResourceNotFound:
-            op(cls, context, resources.VlanInterface.add,
+            op(obj, context, resources.VlanInterface.add,
                      name=vlink_vlan.inf_name_ext_vdom,
                      vdom=const.EXT_VDOM,
                      vlanid=vlink_vlan.vlan_id,
                      interface="npu0_vlink0",
                      ip=getip(ipsubnet, 1))
         try:
-            op(cls, context, resources.VlanInterface.get,
+            op(obj, context, resources.VlanInterface.get,
                      name=vlink_vlan.inf_name_int_vdom,
                      vdom=vdom)
 
         except exception.ResourceNotFound:
-            op(cls, context, resources.VlanInterface.add,
+            op(obj, context, resources.VlanInterface.add,
                      name=vlink_vlan.inf_name_int_vdom,
                      vdom=vdom,
                      vlanid=vlink_vlan.vlan_id,
                      interface="npu0_vlink1",
                      ip=getip(ipsubnet, 2))
 
-    inf_name = const.PREFIX["inf"] + str(vlan_id)
-    try:
-        op(cls, context, resources.VlanInterface.get,
-                 name=inf_name, vdom=vdom)
-    except exception.ResourceNotFound:
-        op(cls, context, resources.VlanInterface.add,
-                 name=inf_name,
-                 vdom=vdom,
-                 vlanid=vlan_id,
-                 interface=cls._fortigate["int_interface"],
-                 alias=network_name)
 
-
-def fortinet_delete_vlink(cls, context, tenant_id):
+def fortinet_delete_vlink(obj, context, tenant_id):
     vdom = fortinet_db.query_record(context,
                                     fortinet_db.Fortinet_ML2_Namespace,
                                    tenant_id=tenant_id).vdom
@@ -118,7 +116,7 @@ def fortinet_delete_vlink(cls, context, tenant_id):
     if not vlink_ip:
         return False
     try:
-        op(cls, context, resources.VlanInterface.delete,
+        op(obj, context, resources.VlanInterface.delete,
                  name=vlink_vlan.inf_name_ext_vdom, vdom=const.EXT_VDOM)
     except exception.ResourceNotFound:
         LOG.exception(_("The vdom link %(vlink)s in the %(vdom)s "
@@ -126,7 +124,7 @@ def fortinet_delete_vlink(cls, context, tenant_id):
                       ({'vlink': vlink_vlan.inf_name_ext_vdom,
                         'vdom':const.EXT_VDOM}))
     try:
-        op(cls, context, resources.VlanInterface.delete,
+        op(obj, context, resources.VlanInterface.delete,
                  name=vlink_vlan.inf_name_int_vdom, vdom=vdom)
     except exception.ResourceNotFound:
         LOG.debug(_("The vdom link %(vlink)s in the %(vdom)s "
@@ -134,13 +132,94 @@ def fortinet_delete_vlink(cls, context, tenant_id):
                       ({'vlink': vlink_vlan.inf_name_ext_vdom,
                         'vdom':const.EXT_VDOM}))
     try:
-        fortinet_db.Fortinet_Vlink_Vlan_Allocation.\
-            delete_record(context, vdom=vdom)
-
-        fortinet_db.Fortinet_Vlink_IP_Allocation.\
-            delete_record(context, vdom=vdom)
-
+        fortinet_db.delete_record(context,
+                                  fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                                  vdom=vdom)
+        fortinet_db.delete_record(context,
+                                  fortinet_db.Fortinet_Vlink_IP_Allocation,
+                                  vdom=vdom)
     except:
         LOG.debug(_("Failed to delete vlink"))
         raise Exception(_("Failed to delete vlink"))
     return True
+
+
+def add_interface_ip(obj, context, **kwargs):
+    """
+    :param context:
+    :param kwargs: example format as below
+        {
+            "ip": "10.160.37.20 255.255.255.0",
+            "name": "port37",
+            "vdom": "root"
+        }
+    :return:
+    """
+    inf_db = fortinet_db.query_record(context,
+                            fortinet_db.Fortinet_Interface,
+                            name=kwargs.get('name'))
+    if const.EXT_DEF_DST in getattr(inf_db, 'ip'):
+        inf_db.update_record(context, inf_db, **kwargs)
+        op(obj, context, resources.VlanInterface.set, **kwargs)
+    else:
+        records = fortinet_db.query_records(context,
+                                  fortinet_db.Fortinet_Interface_subip,
+                                  name=kwargs.get('name'))
+        org_subips = [getattr(record, 'ip') for record in records]
+
+        if kwargs.get('ip') in org_subips:
+            return
+        add_record(obj, context,
+                   fortinet_db.Fortinet_Interface_subip, **kwargs)
+
+        org_subips.append(kwargs.get('ip'))
+        op(obj, context, resources.VlanInterface.set,
+           name=kwargs.get('name'),
+           vdom=kwargs.get('vdom'),
+           secondaryips=org_subips)
+
+
+def delete_interface_ip(obj, context, **kwargs):
+    """
+    :param context:
+    :param kwargs: example format as below
+        {
+            "ip": "10.160.37.20 255.255.255.0",
+            "name": "port37",
+            "vdom": "root"
+        }
+    :return:
+    """
+    records = fortinet_db.query_records(context,
+                                        fortinet_db.Fortinet_Interface_subip,
+                                        name=kwargs.get('name'))
+    org_subips = [getattr(record, 'ip') for record in records]
+    if kwargs.get('ip') in org_subips:
+        org_subips.remove(kwargs["ip"])
+        op(obj, context, resources.VlanInterface.set,
+           name=kwargs.get('name'),
+           vdom=kwargs.get('vdom'),
+           secondaryips=org_subips)
+        fortinet_db.delete_record(context,
+                                  fortinet_db.Fortinet_Interface_subip,
+                                  **kwargs)
+    else:
+        inf_db = fortinet_db.query_record(context,
+                                          fortinet_db.Fortinet_Interface,
+                                          **kwargs)
+        if not inf_db:
+            return
+        if org_subips:
+            kwargs['ip'] = org_subips.pop()
+            op(obj, context, resources.VlanInterface.set,
+               name=kwargs.get('name'),
+               vdom=kwargs.get('vdom'),
+               secondaryips=org_subips)
+            fortinet_db.delete_record(context,
+                                  fortinet_db.Fortinet_Interface_subip,
+                                  **kwargs)
+        else:
+            kwargs['ip'] = const.EXT_DEF_DST
+
+        op(obj, context, resources.VlanInterface.set, **kwargs)
+        inf_db.update_record(context, inf_db, ip=kwargs['ip'])

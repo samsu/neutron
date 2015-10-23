@@ -22,7 +22,7 @@ from oslo.db import exception as os_db_exception
 
 from neutron.db import model_base
 from neutron.db import models_v2
-from neutron.db import l3_db
+
 from neutron.db.external_net_db import ExternalNetwork
 ## TODO: add log here temporarily
 from neutron.openstack.common import log as logging
@@ -285,7 +285,6 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
         ## # after update_record()
         return {'result': record, 'rollback': rollback}
 
-
     @classmethod
     def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
@@ -295,6 +294,7 @@ class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
             if record:
                 record.update_record(context, record, **cls.reset())
         return record
+
 
 class Fortinet_Firewall_Policy(model_base.BASEV2, DBbase):
     """Schema for Fortinet firewall policy."""
