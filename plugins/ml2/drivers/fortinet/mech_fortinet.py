@@ -467,64 +467,44 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         subnet_id = port["fixed_ips"][0]["subnet_id"]
         ip_address = port["fixed_ips"][0]["ip_address"]
         mac = port["mac_address"]
-        #kwargs = {'id': subnet_id}
-        session = context.session
-        subnet_db = fortinet_db.query_record(context, models_v2.Subnet,
+
+        db_subnetv2 = fortinet_db.query_record(context, models_v2.Subnet,
                                              id=subnet_id)
 
-        #subnet = fortinet_db.get_record(session, models_v2.Subnet, **kwargs)
-        #LOG.debug(_("!!!!! subnet = %s" % subnet_db))
         LOG.debug(_("!!!!! port['device_owner'] = %s" % port["device_owner"]))
         if port["device_owner"] in ["network:router_gateway"]:
             if fortinet_db.query_record(context, ExternalNetwork,
                                         network_id=port['network_id']):
-            #if fortinet_db.get_ext_network(context, port["network_id"]):
-                #add ippool and its related firewall policy
                 self._set_ext_gw(context, port)
-
         elif port["device_owner"] in ['compute:nova']:
             # add dhcp related functions
-            reserved_ip = fortinet_db.query_record(context,
-                                     fortinet_db.Fortinet_ML2_ReservedIP,
-                                     port_id=port_id)
-
-            utils.add_record(self, context,
-                             fortinet_db.Fortinet_ML2_ReservedIP,
-                             port_id=port_id,
-                             subnet_id=subnet_id,
-                             mac=mac,
-                             ip=ip_address,
-                             vdom=namespace.vdom)
+            utils.add_reservedip(self, context,
+                                 port_id=port_id,
+                                 subnet_id=subnet_id,
+                                 mac=mac,
+                                 ip=ip_address,
+                                 vdom=namespace.vdom)
 
         elif port["device_owner"] in ['network:router_interface']:
-            # add firewall address and address group
-            if subnet_db.cidr:
-                cidr = netaddr.IPNetwork(subnet_db.cidr)
+            if db_subnetv2.cidr:
+                cidr = netaddr.IPNetwork(db_subnetv2.cidr)
                 subnet = ' '.join([str(cidr.network), str(cidr.netmask)])
-
-                utils.add_resource(self, context,
-                                   fortinet_db.Fortinet_Firewall_Address,
-                                   resources.FirewallAddress,
+                utils.add_fwaddress(self, context,
                                    vdom=namespace.vdom,
                                    name=str(cidr.network),
                                    subnet=subnet)
-
-                addrgrp = {
-                    "name": const.PREFIX['addrgrp'] + vdom,
-                    "vdom": vdom,
-                    "members": [addr['name'],]
-                 }
-                LOG.debug(_("##### addrgrp = %s" % addrgrp))
-                self.add_member_addrgrp(context, **addrgrp)
-                policy = {
-                    "vdom": vdom,
-                    "srcintf": "any",
-                    "srcaddr": addrgrp['name'],
-                    "dstintf": "any",
-                    "dstaddr": addrgrp['name'],
-                    "nat": "disable"
-                }
-                self._add_firewall_policy(context, **policy)
+                addrgrp_name = const.PREFIX['addrgrp'] + namespace.vdom
+                utils.add_addrgrp(self, context,
+                                  name=addrgrp_name,
+                                  vdom=namespace.vdom,
+                                  members=[str(cidr.network),])
+                utils.add_fwpolicy(self, context,
+                                   vdom=namespace.vdom,
+                                   srcintf='any',
+                                   srcaddr=addrgrp_name,
+                                   dstintf='any',
+                                   dstaddr=addrgrp_name,
+                                   nat='disable')
         else:
             # default nothing change
             pass
@@ -540,53 +520,43 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.debug(_("!!!!! mech_context.current = %s" % port))
 
     def delete_port_postcommit(self, mech_context):
-        LOG.debug(_("delete_port_postcommit: called"))
         port = mech_context.current
         LOG.debug(_("!!!!! mech_context = %s" % mech_context))
         LOG.debug(_("!!!!! mech_context.current = %s" % port))
         context = mech_context._plugin_context
-        port_id = port["id"]
-        subnet_id = port["fixed_ips"][0]["subnet_id"]
-        #ip_address = port["fixed_ips"][0]["ip_address"]
-        #mac = port["mac_address"]
-        vdom = fortinet_db.get_subnet(context, subnet_id).vdom
-        kwargs = {'id': subnet_id}
-        session = context.session
-        subnet = fortinet_db.get_record(session, models_v2.Subnet, **kwargs)
-        LOG.debug(_("!!!!! subnet = %s" % subnet))
+        try:
+            port_id = port["id"]
+            subnet_id = port["fixed_ips"][0]["subnet_id"]
+            db_subnet = fortinet_db.query_record(context,
+                                             fortinet_db.Fortinet_ML2_Subnet,
+                                             subnet_id=subnet_id)
+            db_subnetv2 = fortinet_db.query_record(context, models_v2.Subnet,
+                                                   id=subnet_id)
+            if port['device_owner'] in ['network:router_gateway']:
+                if fortinet_db.query_record(context, ExternalNetwork,
+                                            network_id=port['network_id']):
+                    #delete ippool and its related firewall policy
+                    utils.clr_ext_gw(self, context, port)
 
-        if port["device_owner"] in ["network:router_gateway"]:
-            if fortinet_db.get_ext_network(context, port["network_id"]):
-                #delete ippool and its related firewall policy
-                self._clr_ext_gw(context, port)
+            elif port["device_owner"] in ['compute:nova']:
+                # delete dhcp related functions
+                utils.delete_reservedip(self, context, port_id=port_id)
 
-        elif port["device_owner"] in ['compute:nova']:
-            # delete dhcp related functions
-            reserved_ip = fortinet_db.delete_reserved_ip(context, port_id)
-            if reserved_ip:
-                self._update_reserved_ips(context, reserved_ip.subnet_id)
-
-        elif port["device_owner"] in ['network:router_interface']:
-            # add firewall address and address group
-            _net = netaddr.IPNetwork(subnet.cidr)
-            addrgrp = {
-                    "name": const.PREFIX['addrgrp'] + vdom,
-                    "vdom": vdom,
-                    "members": ["%s" % _net.network]
-                 }
-            LOG.debug(_("##### addrgrp = %s" % addrgrp))
-            self.delete_member_addrgrp(context, **addrgrp)
-
-            addr = {
-                "vdom": vdom,
-                "name": "%s" % _net.network
-            }
-            LOG.debug(_("##### addr = %s" % addr))
-            self.delete_address(context, **addr)
-        else:
-            # default nothing change
-            pass
-        return
+            elif port["device_owner"] in ['network:router_interface']:
+                # add firewall address and address group
+                name = const.PREFIX['addrgrp'] + db_subnet.vdom
+                member = str(netaddr.IPNetwork(db_subnetv2.cidr).network)
+                utils.delete_addrgrp(self, context,
+                                     name=name,
+                                     vdom=db_subnet.vdom,
+                                     members=list(member))
+                utils.delete_fwaddress(self, context,
+                                   vdom=db_subnet.vdom,
+                                   name=member)
+        except Exception as e:
+            resources.Exinfo(e)
+            raise ml2_exc.MechanismDriverError(
+                method=sys._getframe().f_code.co_name)
 
 
     def update_port_precommit(self, mech_context):
@@ -689,8 +659,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if not tenant_id:
             raise ValueError
 
-        namespace = utils.fortinet_add_vdom(self, context,
-                                                tenant_id=tenant_id)
+        namespace = utils.add_vdom(self, context, tenant_id=tenant_id)
         utils.fortinet_add_vlink(self, context, namespace.vdom)
         vlink_db = fortinet_db.query_record(context,
                                     fortinet_db.Fortinet_Vlink_Vlan_Allocation,
@@ -926,17 +895,7 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                 LOG.error(_("### Exception= %s" % Exception))
 
 
-    @staticmethod
-    def _get_subnet_netmask(context, subnet_id):
-        session = context.session
-        cls = models_v2.Subnet
 
-        record = fortinet_db.get_record(session, cls, id=subnet_id)
-        if record:
-            return netaddr.IPNetwork(record.cidr).netmask
-        else:
-            LOG.error(("cannot find the subnet id %(id)s"), {"id": subnet_id})
-            raise ValueError
 
     @staticmethod
     def _is_null_ip(context, interface):

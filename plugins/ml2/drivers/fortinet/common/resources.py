@@ -22,8 +22,7 @@ import functools
 from types import MethodType
 
 from neutron.openstack.common import log as logging
-from neutron.plugins.ml2.drivers.fortinet.api_client \
-    import exception as api_ex
+from neutron.plugins.ml2.drivers.fortinet.api_client import exception as api_ex
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 
 LOG = logging.getLogger(__name__)
@@ -80,7 +79,6 @@ class DefaultClassMethods(type):
 
 def rollback(func):
     def wrapper(cls, *args):
-        print "func=%s" % func.__name__
         result = func(cls, *args)
         rollback = {} if not result else \
             cls._prepare_rollback(cls.delete, *args, **result)
@@ -138,11 +136,6 @@ class Base(object):
             Exinfo(e)
             raise e
 
-    def is_exist(self, client, **kwargs):
-        response = client.request(self.method("get"), kwargs)
-        if httplib.OK == response["http_status"]:
-            return True
-        return False
 
 #############################################################
 
@@ -198,17 +191,9 @@ class FirewallAddrgrp(Base):
     def __init__(self):
         super(FirewallAddrgrp, self).__init__()
 
-
-class DhcpServer(Base):
+class DhcpServerRsvAddr(Base):
     def __init__(self):
-        super(DhcpServer, self).__init__()
-
-    @classmethod
-    def _rollback_data(cls, params, **result):
-        return {
-            'vdom': params['data']['vdom'],
-            'id': result['results']['mkey']
-        }
+        super(DhcpServerRsvAddr, self).__init__()
 
 
 

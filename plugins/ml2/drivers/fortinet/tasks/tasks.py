@@ -415,7 +415,7 @@ if __name__ == "__main__":
         user = "admin"
         password = ""
         cli = FortiosApiClient(api, user, password)
-        import ipdb; ipdb.set_trace()
+
 
         a = FirewallPolicy()
         r = RouterStatic()
@@ -441,6 +441,8 @@ if __name__ == "__main__":
 
         #"""
         dbr = fortinet_db.Fortinet_Static_Router()
+        dbl = fortinet_db.Fortinet_Vlink_IP_Allocation()
+        import ipdb; ipdb.set_trace()
         db_rollback = {
             'params': (context, record),
             'func': dbr.delete_record

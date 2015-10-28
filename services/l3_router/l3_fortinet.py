@@ -32,6 +32,8 @@ from neutron.plugins.ml2.drivers.fortinet.db import models as fortinet_db
 from neutron.plugins.ml2.drivers.fortinet.api_client import client
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 from neutron.services.l3_router import l3_router_plugin as router
+from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
+
 
 # TODO: the folowing two imports just for testing purpose
 # TODO: need to be deleted later
@@ -59,7 +61,10 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         super(FortinetL3ServicePlugin, self).__init__()
         self._fortigate = None
         self._driver = None
+        self.task_manager = tasks.TaskManager()
+        self.task_manager.start()
         self.Fortinet_init()
+
 
     def Fortinet_init(self):
         """Fortinet specific initialization for this class."""
@@ -77,19 +82,10 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         LOG.debug(_("!!!!!!! self._fortigate = %s" % self._fortigate))
 
         api_server = [(self._fortigate["address"], 80, False)]
-        msg = {
-            "username": self._fortigate["username"],
-            "secretkey": self._fortigate["password"]
-        }
         self._driver = client.FortiosApiClient(api_server,
-                                               msg["username"],
-                                               msg["secretkey"])
+            self._fortigate["username"], self._fortigate["password"])
 
     def update_router(self, context, id, router):
-        LOG.debug(_("######## update_router"))
-        LOG.debug(_("######## context=%s" % context))
-        LOG.debug(_("######## id=%s" % id))
-        LOG.debug(_("######## router=%s" % router))
         return super(FortinetL3ServicePlugin, self).\
             update_router(context, id, router)
 
@@ -104,7 +100,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         with context.session.begin(subtransactions=True):
             info = super(FortinetL3ServicePlugin, self).add_router_interface(
                 context, router_id, interface_info)
-            port = db.get_port(context.session, info["port_id"])
+            port = db.get_port(context.session, info['port_id'])
             port['admin_state_up'] = True
             port['port'] = port
             LOG.debug("FortinetL3ServicePlugin: "
@@ -119,7 +115,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
             subnet = self._core_plugin._get_subnet(context,
                                                    interface_info["subnet_id"])
             network_id = subnet['network_id']
-            tenant_id = port["tenant_id"]
+            tenant_id = port['tenant_id']
             port_filters = {'network_id': [network_id],
                             'device_owner': [DEVICE_OWNER_ROUTER_INTF]}
             port_count = self._core_plugin.get_ports_count(context,
@@ -130,8 +126,8 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                 # This subnet is already part of some router
                 LOG.error(_("FortinetL3ServicePlugin: adding redundant router "
                             "interface is not supported"))
-                raise Exception(_("FortinetL3ServicePlugin:adding redundant router"
-                                  "interface is not supported"))
+                raise Exception(_("FortinetL3ServicePlugin:adding redundant "
+                                  "router interface is not supported"))
             try:
                 self.add_firewall_policy(context, tenant_id, network_id)
             except Exception:
@@ -157,7 +153,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                 subnet = self._core_plugin._get_subnet(context,
                                                        info['subnet_id'])
                 LOG.debug(_("!!!!!!! info = %s, subnet=%s" % (info, subnet)))
-                tenant_id = subnet["tenant_id"]
+                tenant_id = subnet['tenant_id']
                 network_id = subnet['network_id']
                 self.delete_firewall_policy(context, tenant_id, network_id)
             except Exception:
@@ -203,16 +199,12 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         # floating ip associate with VM port.
             res = super(FortinetL3ServicePlugin, self).\
                         update_floatingip(context, id, floatingip)
-            LOG.debug(_('### return of update_floatingip=%s' % res))
-            LOG.debug(_("##### associate floatingIP"))
             self._associate_floatingip(context, id, floatingip)
         else:
         # disassociate floating ip.
-            LOG.debug(_("##### disassociate floatingIP"))
             self._disassociate_floatingip(context, id)
             res = super(FortinetL3ServicePlugin, self).\
             update_floatingip(context, id, floatingip)
-            LOG.debug(_('### return of update_floatingip=%s' % res))
         return res
 
 
@@ -220,7 +212,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         LOG.debug(_("##### floatingip=%s" % floatingip))
         session = context.session
         fip = self._get_floatingip(context, id).floating_ip_address
-        tenant_id = floatingip["floatingip"]["tenant_id"]
+        tenant_id = floatingip["floatingip"]['tenant_id']
         vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
         ip = self._get_ipallocation(session,
                                     floatingip["floatingip"]["port_id"])
@@ -469,7 +461,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         floatingip = self._get_floatingip(context, floatingip_id)
         LOG.debug(_("### floatingip= %s" % floatingip))
         fip = floatingip["floating_ip_address"]
-        tenant_id = obj["tenant_id"]
+        tenant_id = obj['tenant_id']
         tenant_vdom = fortinet_db.get_namespace(context, tenant_id).vdom_name
         vl_inf = self._get_vl_inf(session, tenant_vdom)
         vip = self.add_vip(context, floatingip_id, tenant_id)
@@ -549,7 +541,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         session = context.session
         floatingip = self._get_floatingip(context, id)
         LOG.debug(_("### floatingip= %s" % floatingip))
-        tenant_id = floatingip["tenant_id"]
+        tenant_id = floatingip['tenant_id']
         vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
         cls = fortinet_db.Fortinet_FloatingIP_Allocation
         floating_ip_address = floatingip["floating_ip_address"]
