@@ -81,9 +81,9 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         }
         LOG.debug(_("!!!!!!! self._fortigate = %s" % self._fortigate))
 
-        api_server = [(self._fortigate["address"], 80, False)]
+        api_server = [(self._fortigate['address'], 80, False)]
         self._driver = client.FortiosApiClient(api_server,
-            self._fortigate["username"], self._fortigate["password"])
+            self._fortigate['username'], self._fortigate['password'])
 
     def update_router(self, context, id, router):
         return super(FortinetL3ServicePlugin, self).\

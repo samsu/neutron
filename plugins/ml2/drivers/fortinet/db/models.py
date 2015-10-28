@@ -330,7 +330,7 @@ class Fortinet_Firewall_Policy(model_base.BASEV2, DBbase):
 class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
     """Schema for Fortinet vlink vlan interface.
     ip_subnet: it is a network with 30 bits network, there
-    are two ips available, the smaller one will be allocated
+    are two ips available, the smaller ip will be allocated
     to the interface of the external network vdom and the
     bigger one will be allocated to the interface of related
     tenant network vdom.
