@@ -17,6 +17,8 @@
 """Fortinet specific database schema/model."""
 
 import sqlalchemy as sa
+from sqlalchemy.inspection import inspect
+
 import neutron.plugins.ml2.db as ml2_db
 from oslo.db import exception as os_db_exception
 
@@ -55,6 +57,16 @@ def query_count(context, cls, **kwargs):
 
 def get_session(context):
     return context.session if hasattr(context, "session") else context
+
+def primary_keys(cls):
+    """
+    :param cls: Object or instance derived from the class ModelBase
+                in the library sqlalchemy
+    :return: list of primary keys
+    """
+    if not isinstance(cls, type):
+        cls = cls.__class__
+    return [key.name for key in inspect(cls).primary_key]
 
 def db_query(cls, context, **kwargs):
     """Get a filtered vlink_vlan_allocation record."""
@@ -108,6 +120,8 @@ class DBbase(object):
     @classmethod
     def delete_record(cls, context, kwargs):
         """
+        Notes: kwargs is a dictionary as a variable, no wrapped as
+        **kwargs because of the requirements of rollback process.
         Delete the record with the value of kwargs from the database,
         kwargs is a dictionary variable, here should not pass into a
         variable like **kwargs
@@ -330,7 +344,7 @@ class Fortinet_Firewall_Policy(model_base.BASEV2, DBbase):
 class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
     """Schema for Fortinet vlink vlan interface.
     ip_subnet: it is a network with 30 bits network, there
-    are two ips available, the smaller ip will be allocated
+    are two ips available, the smaller one will be allocated
     to the interface of the external network vdom and the
     bigger one will be allocated to the interface of related
     tenant network vdom.
@@ -342,6 +356,38 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
     ## secondary_ip = sa.Column(sa.String(50), default=None)
     allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
     bound = sa.Column(sa.Boolean(), default=False, nullable=False)
+
+
+    @staticmethod
+    def reset():
+        """
+        set all value of keys in kwargs to the default value(None or False)
+        """
+        return {
+            'floating_ip_address': None,
+            'vdom': None,
+            'vip_name': None,
+            'allocated': False,
+            'bound': False
+        }
+
+    @classmethod
+    def delete_record(cls, context, kwargs):
+        """Delete vlanid to be allocated into the table"""
+        session = get_session(context)
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if record:
+                record.update_record(context, record, **cls.reset())
+        return record
+
+
+class Fortinet_Firewall_VIP(model_base.BASEV2, DBbase):
+    name = sa.Column(sa.String(36), primary_key=True)
+    vdom = sa.Column(sa.String(11))
+    extip = sa.Column(sa.String(32))
+    extintf = sa.Column(sa.String(32))
+    mappedip = sa.Column(sa.String(32), default=None)
 
 
 class Fortinet_Firewall_IPPool(model_base.BASEV2, DBbase):

@@ -195,6 +195,9 @@ class DhcpServerRsvAddr(Base):
     def __init__(self):
         super(DhcpServerRsvAddr, self).__init__()
 
+class FirewallVip(Base):
+    def __init__(self):
+        super(FirewallVip, self).__init__()
 
 
 if __name__ == "__main__":
