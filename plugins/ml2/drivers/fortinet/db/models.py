@@ -268,7 +268,6 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
         ## # after update_record()
         return {'result': record, 'rollback': rollback}
 
-
     @classmethod
     def delete_record(cls, context, kwargs):
         """Delete vlanid to be allocated into the table"""
@@ -278,6 +277,12 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
             if record:
                 record.update_record(context, record, **cls.reset())
         return record
+
+
+class Fortinet_Vdom_Vlink(model_base.BASEV2, DBbase):
+    """Schema for Fortinet vlink vlan interface."""
+    name = sa.Column(sa.String(11), primary_key=True)
+    vdom = sa.Column(sa.String(11), primary_key=True)
 
 
 class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
@@ -355,7 +360,8 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
     vip_name = sa.Column(sa.String(50))
     ## secondary_ip = sa.Column(sa.String(50), default=None)
     allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
-    bound = sa.Column(sa.Boolean(), default=False, nullable=False)
+    ## TODO: delete the field bound
+    ##bound = sa.Column(sa.Boolean(), default=False, nullable=False)
 
 
     @staticmethod
@@ -367,9 +373,28 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
             'floating_ip_address': None,
             'vdom': None,
             'vip_name': None,
-            'allocated': False,
-            'bound': False
+            'allocated': False
+            #'bound': False
         }
+
+    @classmethod
+    def add_record(cls, context, **kwargs):
+        session = get_session(context)
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if not record:
+                record = cls.query(context, allocated=False)
+                kwargs.setdefault('allocated', True)
+                record.update_record(context, record, **kwargs)
+                rollback = record._prepare_rollback(context,
+                                                    cls.delete_record,
+                                                    kwargs)
+            else:
+                rollback = {}
+        ## need to check the attribute in the record whether updated
+        ## # after update_record()
+        return {'result': record, 'rollback': rollback}
+
 
     @classmethod
     def delete_record(cls, context, kwargs):
@@ -431,7 +456,7 @@ class ML2_FortinetPort(model_base.BASEV2, models_v2.HasId,
     network_id = sa.Column(sa.String(36),
                            sa.ForeignKey("ml2_Fortinetnetworks.id"),
                            nullable=False)
-    admin_state_up = sa.Column(sa.Boolean, nullable=False)
+    admin_state_up = sa.Column(sa.Boolean, nullable=True)
     physical_interface = sa.Column(sa.String(36))
     vlan_id = sa.Column(sa.String(36))
 

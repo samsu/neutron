@@ -34,7 +34,10 @@ ML2_FORTINET = [cfg.StrOpt('address', default='',
                                  'default is 169.254.0.0/20')),
                cfg.StrOpt('vip_mappedip_range', default='169.254.128.0/26',
                           help=_('vdom link interface IP range, '
-                                 'default is 169.254.128.0/20'))
+                                 'default is 169.254.128.0/20')),
+               cfg.StrOpt('npu', default=True,
+                          help=_('If npu is True, it requires hardware FGT'
+                                 'default is True'))
                ]
 
 cfg.CONF.register_opts(ML2_FORTINET, "ml2_fortinet")

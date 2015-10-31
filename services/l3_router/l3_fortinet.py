@@ -33,7 +33,7 @@ from neutron.plugins.ml2.drivers.fortinet.api_client import client
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 from neutron.services.l3_router import l3_router_plugin as router
 from neutron.plugins.ml2.drivers.fortinet.tasks import tasks
-
+from neutron.plugins.ml2.drivers.fortinet.common import utils
 
 # TODO: the folowing two imports just for testing purpose
 # TODO: need to be deleted later
@@ -79,11 +79,10 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
             "vlink_vlan_id_range": cfg.CONF.ml2_fortinet.vlink_vlan_id_range,
             "vlink_ip_range": cfg.CONF.ml2_fortinet.vlink_ip_range
         }
-        LOG.debug(_("!!!!!!! self._fortigate = %s" % self._fortigate))
 
-        api_server = [(self._fortigate["address"], 80, False)]
+        api_server = [(self._fortigate['address'], 80, False)]
         self._driver = client.FortiosApiClient(api_server,
-            self._fortigate["username"], self._fortigate["password"])
+            self._fortigate['username'], self._fortigate['password'])
 
     def update_router(self, context, id, router):
         return super(FortinetL3ServicePlugin, self).\
@@ -129,6 +128,15 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                 raise Exception(_("FortinetL3ServicePlugin:adding redundant "
                                   "router interface is not supported"))
             try:
+                utils.add_fwpolicy(self, context,
+                                   vdom=namespace.vdom,
+                                   srcintf='any',
+                                   srcaddr=addrgrp_name,
+                                   dstintf='any',
+                                   dstaddr=addrgrp_name,
+                                   nat='disable')
+
+
                 self.add_firewall_policy(context, tenant_id, network_id)
             except Exception:
                 LOG.error(_("Failed to create Fortinet resources to add router "
@@ -188,8 +196,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
 
 
     def delete_floatingip(self, context, id):
-        LOG.debug('delete_floatingip context=%s, id=%s' % (context, id))
-        self._revoke_floatingip(context, id)
+        self._release_floatingip(context, id)
         super(FortinetL3ServicePlugin,
               self).delete_floatingip(context, id)
 
@@ -209,17 +216,28 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
 
 
     def _associate_floatingip(self, context, id, floatingip):
-        LOG.debug(_("##### floatingip=%s" % floatingip))
-        session = context.session
-        fip = self._get_floatingip(context, id).floating_ip_address
-        tenant_id = floatingip["floatingip"]['tenant_id']
-        vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        ip = self._get_ipallocation(session,
-                                    floatingip["floatingip"]["port_id"])
-        LOG.debug(_("##### ip=%s" % ip))
-        if not getattr(ip, "ip_address", None):
-            raise Exception("No ip address binding the port %s" % id)
-        fixed_ip_address = ip.ip_address
+        #LOG.debug(_("##### floatingip=%s" % floatingip))
+        #session = context.session
+        l3db_fip = self._get_floatingip(context, id)
+        db_namespace = fortinet_db.query_record(context,
+                                fortinet_db.Fortinet_ML2_Namespace,
+                                tenant_id=l3db_fip.tenant_id)
+
+        db_fip = fortinet_db.query_record(context,
+                            fortinet_db.Fortinet_FloatingIP_Allocation,
+                            floating_ip_address=l3db_fip.floating_ip_address,
+                            allocated=True)
+
+
+        #fip = self._get_floatingip(context, id).floating_ip_address
+        #tenant_id = floatingip['floatingip']['tenant_id']
+        #vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
+        #ip = self._get_ipallocation(session,
+        #                            floatingip["floatingip"]["port_id"])
+        #LOG.debug(_("##### ip=%s" % ip))
+        #if not getattr(ip, "ip_address", None):
+        #    raise Exception("No ip address binding the port %s" % id)
+        #fixed_ip_address = ip.ip_address
 
         segment = db.get_network_segments(session, ip.network_id)
         LOG.debug(_("##### segment=%s" % segment))
@@ -345,13 +363,21 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
                                          cls,
                                          **vlink_vlan).inf_name_int_vdom
 
-        srcintf = self._get_srcintf(session, network_id)
+        srcintf = self.utils.get_srcintf(session, network_id)
         kwargs = {
             "vdom_name": vdom_name,
             "srcintf": srcintf,
             "dstintf": dstintf,
             "nat": "enable"
         }
+
+        utils.add_fwpolicy(self, context,
+                           vdom=namespace.vdom,
+                           srcintf=' ',
+                           dstintf=fortinet_db.query_record(context, fortinet_db.Fortinet_Vlink_Vlan_Allocation, vdom=vdom, allocated=True).inf_name_int_vdom,
+                           nat='enable')
+
+
         self._add_firewall_policy(context, **kwargs)
 
 
@@ -398,7 +424,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         LOG.debug(_("### delete_firewall_policy"))
         session = context.session
         vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        srcintf = self._get_srcintf(session, network_id)
+        srcintf = self.utils.get_srcintf(session, network_id)
         kwargs = {"vdom_name": vdom_name, "srcintf": srcintf}
         self._delete_firewall_policy(context, **kwargs)
 
@@ -443,7 +469,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
             {'tenant_id': subnet['tenant_id'],
              'network_id': subnet['network_id'],
              'fixed_ips': [fixed_ip],
-             'mac_address': self._get_mac(),
+             'mac_address': self.utils.get_mac(self),
              'admin_state_up': True,
              'device_id': router.id,
              'device_owner': owner,
@@ -455,639 +481,169 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
            the vip function.
         2. add another ip of the ip pair to the secondaryip list of
            the external interface.
+
+        obj example:
+        {
+            'floating_network_id': u'1c1dbecc-9dac-4311-a346-f147a04c8dc8',
+            'router_id': None,
+            'fixed_ip_address': None,
+            'floating_ip_address': u'10.160.37.113',
+            'tenant_id': u'3998b33381fb48f694369689065a3760',
+            'status': 'DOWN',
+            'port_id': None,
+            'id': '5ec1b08b-77c1-4e39-80ac-224ee937ee9f'
+        }
+
+        The floatingip is a instance of neutron.db.l3_db.FloatingIP, example:
+        {
+            tenant_id=u'3998b33381fb48f694369689065a3760',
+            id=u'25e1588a-5ec5-4fbc-bdef-eff8713da8f8',
+            floating_ip_address=u'10.160.37.111',
+            floating_network_id=u'1c1dbecc-9dac-4311-a346-f147a04c8dc8',
+            floating_port_id=u'4b4120d4-77f9-4f82-b823-05876929a1c4',
+            fixed_port_id=None,
+            fixed_ip_address=None,
+            router_id=None,
+            last_known_router_id=None,
+            status=u'DOWN'
+        }
         """
-        session = context.session
-        floatingip_id = obj["id"]
-        floatingip = self._get_floatingip(context, floatingip_id)
-        LOG.debug(_("### floatingip= %s" % floatingip))
-        fip = floatingip["floating_ip_address"]
-        tenant_id = obj['tenant_id']
-        tenant_vdom = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        vl_inf = self._get_vl_inf(session, tenant_vdom)
-        vip = self.add_vip(context, floatingip_id, tenant_id)
-        if vip:
-            try:
-                secondaryip = self.add_secondaryip(context,
-                                                   floatingip_id,
-                                                   tenant_id)
-                if secondaryip:
-                    message = {
-                        "vdom_name": const.EXT_VDOM,
-                        #"srcintf": self._fortigate["ext_interface"],
-                        "srcintf": 'any',
-                        "dstintf": secondaryip["name"],
-                        "dstaddr": vip["name"],
-                        "nat": "enable"
-                    }
-                    LOG.debug(_("### message= %s" % message))
-                    self._add_firewall_policy(context, **message)
+        db_namespace = fortinet_db.query_record(context,
+                                        fortinet_db.Fortinet_ML2_Namespace,
+                                        tenant_id=obj['tenant_id'])
 
-                    # add firewall ippool
-                    kwargs = {
-                        "name": fip,
-                        "vdom_name": const.EXT_VDOM,
-                        "startip": fip
-                    }
-                    LOG.debug(_("### kwargs= %s" % kwargs))
-                    self.add_ippool(context, **kwargs)
+        db_fip = utils.add_record(self, context,
+                                fortinet_db.Fortinet_FloatingIP_Allocation,
+                                vdom=db_namespace.vdom,
+                                floating_ip_address=obj['floating_ip_address'],
+                                vip_name=obj['floating_ip_address'])
 
-                    # add firewall address
-                    kwargs = {
-                        "floating_ip_address": fip,
-                        "allocated": True
-                    }
-                    cls = fortinet_db.Fortinet_FloatingIP_Allocation
-                    record = fortinet_db.get_record(session, cls, **kwargs)
-                    int_ip = self._get_ip(record.ip_subnet, 2)
-                    LOG.debug(_("record=%s" %record))
-                    LOG.debug(_("int_ip=%s" %int_ip))
-                    kwargs = {
-                        "name": int_ip,
-                        "vdom_name": const.EXT_VDOM,
-                        "subnet": "%s 255.255.255.255" % int_ip
-                    }
-                    LOG.debug(_("kwargs=%s" %kwargs))
-                    self.add_address(context, **kwargs)
+        utils.add_vip(self, context,
+                      vdom=const.EXT_VDOM,
+                      name=db_fip.vip_name,
+                      extip=db_fip.floating_ip_address,
+                      extintf=self._fortigate['ext_interface'],
+                      mappedip=utils.getip(db_fip.ip_subnet, 2))
 
-                    # add firewall policy
-                    kwargs = {
-                        "vdom_name": const.EXT_VDOM,
-                        "srcintf": vl_inf[1],
-                        "srcaddr": int_ip,
-                        "dstintf": self._fortigate["ext_interface"],
-                        "poolname": fip
-                    }
-                    LOG.debug(_("kwargs=%s" %kwargs))
-                    policy_id = self._add_firewall_policy(context, **kwargs)
-                    self._head_firewall_policy(const.EXT_VDOM, policy_id)
+        int_inf, ext_inf = utils.get_vlink_inf(self, context,
+                                               vdom=db_namespace.vdom)
+        utils.add_secondaryip(self, context, name=ext_inf, vdom=const.EXT_VDOM,
+                              ip=utils.getip(db_fip.ip_subnet, 1))
 
-                    # add ippool of int_ip
-                    kwargs = {
-                        "name": int_ip,
-                        "vdom_name": tenant_vdom,
-                        "startip": int_ip
-                    }
-                    LOG.debug(_("kwargs=%s" %kwargs))
-                    self.add_ippool(context, **kwargs)
+        utils.add_fwpolicy(self, context,
+                           vdom_name=const.EXT_VDOM,
+                           srcintf='any',
+                           dstintf=ext_inf,
+                           dstaddr=db_fip.vip_name,
+                           nat='enable')
 
-                else:
-                    self.delete_vip(context, floatingip_id)
-            except Exception:
-                self.delete_vip(context, floatingip_id)
-                raise Exception("Failed to add secondaryip")
+        utils.add_fwippool(self, context,
+                           name=db_fip.floating_ip_address,
+                           vdom=const.EXT_VDOM,
+                           startip=db_fip.floating_ip_address)
+
+        ipaddr = utils.get_ipaddr(db_fip.ip_subnet, 2)
+        utils.add_fwaddress(self, context,
+                            name=ipaddr,
+                            vdom=const.EXT_VDOM,
+                            subnet="%s 255.255.255.255" % ipaddr)
+
+        db_fwpolicy = utils.add_fwpolicy(self, context,
+                           vdom_name=const.EXT_VDOM,
+                           srcintf=ext_inf,
+                           srcaddr=ipaddr,
+                           dstintf=self._fortigate['ext_interface'],
+                           poolname=db_fip.floating_ip_address)
+        utils.head_firewall_policy(self, context,
+                                   vdom=const.EXT_VDOM,
+                                   id=db_fwpolicy.edit_id)
+
+        utils.add_fwippool(self, context,
+                           name=ipaddr,
+                           vdom=db_namespace.vdom,
+                           startip=ipaddr)
 
 
-    def _revoke_floatingip(self, context, id):
-        session = context.session
-        floatingip = self._get_floatingip(context, id)
-        LOG.debug(_("### floatingip= %s" % floatingip))
-        tenant_id = floatingip['tenant_id']
-        vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        cls = fortinet_db.Fortinet_FloatingIP_Allocation
-        floating_ip_address = floatingip["floating_ip_address"]
-        kwargs = {
-            "floating_ip_address": floating_ip_address,
-            "allocated": True
+    def _release_floatingip(self, context, id):
+        """
+        :param context:
+        :param id: the floatingip id in neutron.db.l3_db.FloatingIP.
+        {
+                tenant_id=u'3998b33381fb48f694369689065a3760',
+                id=u'25e1588a-5ec5-4fbc-bdef-eff8713da8f8',
+                floating_ip_address=u'10.160.37.111',
+                floating_network_id=u'1c1dbecc-9dac-4311-a346-f147a04c8dc8',
+                floating_port_id=u'4b4120d4-77f9-4f82-b823-05876929a1c4',
+                fixed_port_id=None,
+                fixed_ip_address=None,
+                router_id=None,
+                last_known_router_id=None,
+                status=u'DOWN'
         }
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record= %s" % record))
-        if record:
-            try:
-                vl_inf = self._get_vl_inf(session, vdom_name)
-                kwargs = {
-                    "vdom_name": const.EXT_VDOM,
-                    "srcintf": self._fortigate["ext_interface"],
-                    "dstintf": vl_inf[1],
-                    "dstaddr": record.vip_name
-                }
-                LOG.debug(_("### kwargs= %s" % kwargs))
-                self._delete_firewall_policy(context, **kwargs)
-                if self.delete_secondaryip(context, id, tenant_id):
-                    self.delete_vip(context, id)
+        :return:
+        """
+        l3db_fip = self._get_floatingip(context, id)
+        db_namespace = fortinet_db.query_record(context,
+                                fortinet_db.Fortinet_ML2_Namespace,
+                                tenant_id=l3db_fip.tenant_id)
 
-                # delete ippool of the int_ip in the tenant vdom
-                #cls = fortinet_db.Fortinet_FloatingIP_Allocation
-                #record = fortinet_db.get_record(session, cls, **kwargs)
-                LOG.debug(_("### record= %s" % record))
-                int_ip = self._get_ip(record.ip_subnet, 2)
-                kwargs = {
-                    "name": int_ip,
-                    "vdom_name": vdom_name
-                }
-                LOG.debug(_("### kwargs= %s" % kwargs))
-                self.delete_ippool(context, **kwargs)
-
-                # delete firewall policy
-                kwargs = {
-                    "vdom_name": const.EXT_VDOM,
-                    "srcintf": vl_inf[1],
-                    "srcaddr": int_ip,
-                    "dstintf": self._fortigate["ext_interface"],
-                    "poolname": floating_ip_address
-                }
-                LOG.debug(_("### kwargs= %s" % kwargs))
-                self._delete_firewall_policy(context, **kwargs)
-
-                # delete firewall addresses of int_ip in the external vdom
-                kwargs = {
-                    "name": int_ip,
-                    "vdom_name": const.EXT_VDOM
-                }
-                LOG.debug(_("### kwargs= %s" % kwargs))
-                self.delete_address(context, **kwargs)
-
-                # delete ippool of floatingip in the external vdom
-                kwargs = {
-                    "name": floating_ip_address,
-                    "vdom_name": const.EXT_VDOM
-                }
-                LOG.debug(_("### kwargs= %s" % kwargs))
-                self.delete_ippool(context, **kwargs)
-            except Exception:
-                raise Exception("Failed to delete secondaryip")
-
-
-    def _head_firewall_policy(self, vdom, id):
-        LOG.debug(_("_head_firewall_policy, vdom=%s, id=%s" %(vdom, id)))
-        message = {
-            "vdom": vdom
-        }
-        resp = self._driver.request("GET_FIREWALL_POLICY", **message)
-        LOG.debug(_("#####  response=%s" %resp))
-        if resp["results"]:
-            headid = resp["results"][0]["policyid"]
-            message.setdefault("id", id)
-            message.setdefault("before", headid)
-            self._driver.request("MOVE_FIREWALL_POLICY", **message)
-
-
-    def add_secondaryip(self, context, floatingip_id, tenant_id):
-        LOG.debug(_("add_secondaryip"))
-        return self._secondaryip("ADD", context, floatingip_id, tenant_id)
-
-    def delete_secondaryip(self, context, floatingip_id, tenant_id):
-        LOG.debug(_("### delete_secondaryip"))
-        return self._secondaryip("DELETE", context, floatingip_id, tenant_id)
-
-
-    def _secondaryip(self, op, context, floatingip_id, tenant_id):
-        LOG.debug(_("_secondaryip"))
-        secondaryips = []
-        session = context.session
-        floatingip = self._get_floatingip(context, floatingip_id)
-        LOG.debug(_("### floatingip= %s" % floatingip))
-        floating_ip_address = floatingip["floating_ip_address"]
-        vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        kwargs = {
-            "floating_ip_address": floating_ip_address,
-            "allocated": True
-        }
-        cls = fortinet_db.Fortinet_FloatingIP_Allocation
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        if not record:
-            LOG.error(_("The floating ip %s is not recorded"
-                            % floating_ip_address))
-            raise Exception("The floating ip %s cannot not be found"
-                            % floating_ip_address)
-        try:
-            if op == "ADD":
-                kws = {"vdom_name": vdom_name}
-            elif op == "DELETE":
-                kws = {"vdom_name": None}
-            fortinet_db.update_record(context, record, **kws)
-            kwargs = {"vdom_name": vdom_name, "allocated": True}
-            records = fortinet_db.get_records(session, cls, **kwargs)
-            for _record in records:
-                secondaryips.append(self._get_ip_mask(_record.ip_subnet))
-            #secondaryips.append(self._get_ip_mask(record.ip_subnet))
-            LOG.debug(_("### secondaryips= %s" % secondaryips))
-            vl_inf = self._get_vl_inf(session, vdom_name)
-            message = {
-                "name": vl_inf[1],
-                "vdom": const.EXT_VDOM,
-                "secondaryips": secondaryips
-            }
-            resp = self._driver.request("SET_VLAN_INTERFACE", **message)
-            LOG.debug(_("### resp= %s" % resp))
-            return message
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("### Exception= %s" % Exception))
-        return None
-
-
-    def add_ippool(self, context, **kwargs):
-        LOG.debug(_("### add_ippool"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_IPPool
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        if "name" in kwargs:
-            kwargs.setdefault("startip", kwargs["name"])
-            kwargs.setdefault("endip", kwargs["startip"])
-        LOG.debug(_("### record = %s" % record))
-        if not record:
-            try:
-                # use vdom first
-                if kwargs.has_key("vdom_name"):
-                    kwargs.setdefault("vdom", kwargs["vdom_name"])
-                    del kwargs["vdom_name"]
-                self._driver.request("ADD_FIREWALL_IPPOOL", **kwargs)
-
-                if kwargs.has_key("vdom"):
-                    kwargs.setdefault("vdom_name", kwargs["vdom"])
-                    del kwargs["vdom"]
-                fortinet_db.add_record(session, cls, **kwargs)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("### Exception= %s" % Exception))
-                    self._driver.request("DELETE_FIREWALL_IPPOOL", **kwargs)
-                    fortinet_db.delete_record(session, cls, **kwargs)
-
-
-    def delete_ippool(self, context, **kwargs):
-        LOG.debug(_("### delete_ippool"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_IPPool
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record = %s" % record))
-        if not record:
-            return None
-        try:
-            # use vdom first
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
-            self._driver.request("DELETE_FIREWALL_IPPOOL", **kwargs)
-
-            if kwargs.has_key("vdom"):
-                kwargs.setdefault("vdom_name", kwargs["vdom"])
-                del kwargs["vdom"]
-            fortinet_db.delete_record(session, cls, **kwargs)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("### Exception= %s" % Exception))
-
-
-    def add_address(self, context, **kwargs):
-        LOG.debug(_("### add_address"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_Address
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record = %s" % record))
-        LOG.debug(_("### kwargs = %s" % kwargs))
-        if not record:
-            try:
-                if kwargs.has_key("vdom_name"):
-                    kwargs.setdefault("vdom", kwargs["vdom_name"])
-                    del kwargs["vdom_name"]
-                self._driver.request("ADD_FIREWALL_ADDRESS", **kwargs)
-
-                if kwargs.has_key("vdom"):
-                    kwargs.setdefault("vdom_name", kwargs["vdom"])
-                    del kwargs["vdom"]
-                fortinet_db.add_record(session, cls, **kwargs)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("### Exception= %s" % Exception))
-                    self._driver.request("DELETE_FIREWALL_ADDRESS", **kwargs)
-                    fortinet_db.delete_record(session, cls, **kwargs)
-
-
-    def delete_address(self, context, **kwargs):
-        LOG.debug(_("### delete_address"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_Address
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record = %s" % record))
-        if not record:
-            return None
-        try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
-            self._driver.request("DELETE_FIREWALL_ADDRESS", **kwargs)
-
-            if kwargs.has_key("vdom"):
-                kwargs.setdefault("vdom_name", kwargs["vdom"])
-                del kwargs["vdom"]
-            fortinet_db.delete_record(session, cls, **kwargs)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("### Exception= %s" % Exception))
-
-    def add_addrgrp(self, context, **kwargs):
-        LOG.debug(_("### add_addrgrp"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_Address
-        if not kwargs.get("members", None):
-            LOG.debug(_("### there is no member"))
+        db_fip = fortinet_db.query_record(context,
+                            fortinet_db.Fortinet_FloatingIP_Allocation,
+                            floating_ip_address=l3db_fip.floating_ip_address,
+                            allocated=True)
+        if not db_fip:
             return
-        #record = fortinet_db.get_record(session, cls, **kwargs)
-        #LOG.debug(_("### record = %s" % record))
-        try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
-            self._driver.request("ADD_FIREWALL_ADDRGRP", **kwargs)
-            for name in kwargs["members"]:
-                addrinfo = {
-                    "name": name,
-                    "vdom_name": kwargs["vdom"]
-                }
-                record = fortinet_db.get_record(session, cls, **addrinfo)
-                if not record.group:
-                    addrinfo.setdefault("group", kwargs["name"])
-                    fortinet_db.update_record(context, record, **addrinfo)
-                else:
-                    LOG.debug(_("### The memeber %(member)s "
-                                "is already joined a group"),
-                              {"member": record})
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("### Exception= %s" % Exception))
 
+        int_inf, ext_inf = utils.get_vlink_inf(self, context,
+                                           vdom=db_namespace.vdom)
+        ipaddr = utils.get_ipaddr(db_fip.ip_subnet, 2)
 
-    def add_member_addrgrp(self, context, **kwargs):
-        """
-        :param context: for database
-        :param kwargs:
-            example format
-            {
-                "name": "osvdm1_net",
-                "vdom": "osvdm1",
-                "members": ["192.168.10.0", "192.168.33.0"]
-            }
-            each member of members is the address name to be added in
-            the specific firewall address group in FGT.
-        """
-        LOG.debug(_("### add_member_addrgrp"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_Address
-        if not kwargs.get("members", None) and not kwargs.get("name", None):
-            LOG.debug(_("### there is no member and no group name"))
-            return
-        records = fortinet_db.get_records(session, cls, group=kwargs["name"])
-        LOG.debug(_("### records = %s" % records))
-        if not records:
-            self.add_addrgrp(context, **kwargs)
-        else:
-            try:
-                for name in kwargs["members"]:
-                    addrinfo = {
-                        "name": name,
-                        "vdom_name": kwargs["vdom"]
-                    }
-                    record = fortinet_db.get_record(session, cls, **addrinfo)
-                    if not record.group:
-                        addrinfo.setdefault("group", kwargs["name"])
-                        fortinet_db.update_record(context, record, **addrinfo)
-                    else:
-                        LOG.debug(_("### The memeber %(member)s "
-                                    "is already joined a group"),
-                                  {"member": record})
-                for record in records:
-                    kwargs["members"].append(record.name)
-                if kwargs.has_key("vdom_name"):
-                    kwargs.setdefault("vdom", kwargs["vdom_name"])
-                    del kwargs["vdom_name"]
-                self._driver.request("SET_FIREWALL_ADDRGRP", **kwargs)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("### Exception= %s" % Exception))
+        utils.delete_fwippool(self, context,
+                              name=ipaddr,
+                              vdom=db_namespace.vdom,
+                              startip=ipaddr)
 
+        utils.delete_fwpolicy(self, context,
+                              vdom_name=const.EXT_VDOM,
+                              srcintf=ext_inf,
+                              srcaddr=ipaddr,
+                              dstintf=self._fortigate['ext_interface'],
+                              poolname=db_fip.floating_ip_address)
 
-    def delete_member_addrgrp(self, context, **kwargs):
-        """
-        :param context: for database
-        :param kwargs:
-            example format
-            {
-                "name": "osvdm1_net",
-                "vdom": "osvdm1",
-                "members": ["192.168.10.0", "192.168.33.0"]
-            }
-            each member of members is the address name to be deleted in
-            the specific firewall address group in FGT.
-        """
-        LOG.debug(_("### delete_member_addrgrp"))
-        session = context.session
-        cls = fortinet_db.Fortinet_Firewall_Address
-        if not kwargs.get("members", None) and not kwargs.get("name", None):
-            LOG.debug(_("### there is no member and no group name"))
-            return
-        records = fortinet_db.get_records(session, cls, group=kwargs["name"])
-        LOG.debug(_("### records = %s" % records))
-        if not records:
-            LOG.error(_("There is not any record in db"))
-            raise
+        utils.delete_fwaddress(self, context,
+                               name=ipaddr,
+                               vdom=const.EXT_VDOM,
+                               subnet="%s 255.255.255.255" % ipaddr)
 
-        try:
-            if kwargs.has_key("vdom_name"):
-                kwargs.setdefault("vdom", kwargs["vdom_name"])
-                del kwargs["vdom_name"]
-            members = []
-            for record in records:
-                if record.name in kwargs["members"]:
-                    fortinet_db.update_record(context, record, group=None)
-                else:
-                    members.append(record.name)
-            kwargs["members"] = members
-            self._driver.request("SET_FIREWALL_ADDRGRP", **kwargs)
-            LOG.debug(_("### The member %(member)s "
-                        "is kept in the group"),
-                        {"member": members})
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.error(_("### Exception= %s" % Exception))
+        utils.delete_fwippool(self, context,
+                              name=db_fip.floating_ip_address,
+                              vdom=const.EXT_VDOM,
+                              startip=db_fip.floating_ip_address)
 
+        utils.delete_fwpolicy(self, context,
+                              vdom=const.EXT_VDOM,
+                              srcintf='any',
+                              dstintf=ext_inf,
+                              dstaddr=l3db_fip.floating_ip_address)
 
-    def add_vip(self, context, floatingip_id, tenant_id, mappedip=None):
-        LOG.debug(_("### add_vip"))
-        session = context.session
-        vdom_name = fortinet_db.get_namespace(context, tenant_id).vdom_name
-        floatingip = self._get_floatingip(context, floatingip_id)
-        LOG.debug(_("### floatingip= %s" % floatingip))
-        floating_ip_address = floatingip["floating_ip_address"]
-        kwargs = {"floating_ip_address": floating_ip_address}
-        cls = fortinet_db.Fortinet_FloatingIP_Allocation
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record= %s" % record))
-        if record:
-            if record.allocated and record.bound:
-                LOG.debug(_("The floating_ip_address %s already used"
-                            % floating_ip_address))
-                raise Exception("The floating ip %s already used"
-                                % floating_ip_address)
-            elif record.allocated and not record.bound:
-                if vdom_name == const.EXT_VDOM:
-                    raise Exception("vdom_name %s is invalid" % vdom_name)
-                try:
-                    kwargs = {"bound": True}
-                    fortinet_db.update_record(context, record, **kwargs)
-                    #vl_inf = self._get_vl_inf(session, vdom_name)
-                    if not mappedip:
-                        mappedip = floatingip["fixed_ip_address"]
-                    message = {
-                        "vdom": vdom_name,
-                        "name": record.vip_name,
-                        "extip": self._get_ip(record.ip_subnet, 2),
-                        "extintf": vl_inf[0],
-                        #"extintf": 'any',
-                        "mappedip": mappedip
-                    }
-                    resp = self._driver.request("ADD_FIREWALL_VIP", **message)
-                    LOG.debug(_("### resp= %s" % resp))
-                    return message
-                except Exception:
-                    with excutils.save_and_reraise_exception():
-                        LOG.error(_("### Exception= %s" % Exception))
-                        kwargs = {"vdom_name": None, "bound": False}
-                        fortinet_db.update_record(context, record, **kwargs)
-            else:
-                LOG.debug(_("The floating_ip_address %s is not allocated"
-                            % floating_ip_address))
-                raise Exception("The floating ip %s not allocated"
-                                % floating_ip_address)
-        else:
-            kwargs = {"allocated": False}
-            record = fortinet_db.get_record(session, cls, **kwargs)
-            LOG.debug(_("### record=%s" % record))
-            if not record:
-                LOG.debug(_("There is not any available internal ipsubnet"))
-                raise Exception("Error: The internal ipsubnet is full")
-            try:
-                kwargs = {
-                    "floating_ip_address": floating_ip_address,
-                    "vip_name": floating_ip_address,
-                    "allocated": True
-                }
-                fortinet_db.update_record(context, record, **kwargs)
-                message = {
-                    "vdom": const.EXT_VDOM,
-                    "name": kwargs["vip_name"],
-                    "extip": kwargs["vip_name"],
-                    #"extintf": self._fortigate["ext_interface"],
-                    "extintf": 'any',
-                    "mappedip": self._get_ip(record.ip_subnet, 2)
-                }
-                LOG.debug(_("### message=%s" % message))
-                resp = self._driver.request("ADD_FIREWALL_VIP", **message)
-                LOG.debug(_("### resp= %s" % resp))
-                return message
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_("### Exception= %s" % Exception))
-                    kwargs = {
-                        "floatingip_id": None,
-                        "vip_name": None,
-                        "allocated": False
-                    }
-                    fortinet_db.update_record(context, record, **kwargs)
-        return None
+        utils.delete_secondaryip(self, context,
+                                 name=ext_inf,
+                                 vdom=const.EXT_VDOM,
+                                 ip=utils.getip(db_fip.ip_subnet, 1))
 
+        utils.delete_vip(self, context,
+                         vdom=const.EXT_VDOM,
+                         name=db_fip.vip_name,
+                         extip=db_fip.floating_ip_address,
+                         extintf=self._fortigate['ext_interface'],
+                         mappedip=utils.getip(db_fip.ip_subnet, 2))
 
-    def delete_vip(self, context, floatingip_id):
-        LOG.debug(_("### delete_vip"))
-        session = context.session
-        floatingip = self._get_floatingip(context, floatingip_id)
-        floating_ip_address = floatingip["floating_ip_address"]
-        LOG.debug(_("### floatingip= %s" % floatingip))
-        kwargs = {
-            "floating_ip_address": floating_ip_address,
-            "allocated": True
-        }
-        cls = fortinet_db.Fortinet_FloatingIP_Allocation
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        LOG.debug(_("### record= %s" % record))
-        if not record:
-            LOG.debug(_("There is not any record with %s" % floatingip))
-            return False
-        if not record.bound:
-            try:
-                message = {
-                    "vdom": const.EXT_VDOM,
-                    "name": record.vip_name
-                }
-                LOG.debug(_("### message= %s" % message))
-                resp = self._driver.request("DELETE_FIREWALL_VIP", **message)
-                kwargs = {
-                    "floating_ip_address": None,
-                    "allocated": False,
-                    "vip_name": None
-                }
-                fortinet_db.update_record(context, record, **kwargs)
-                return True
-            except Exception:
-                LOG.error(_("### Exception= %s" % Exception))
-                raise Exception
-        else:
-            try:
-                message = {
-                        "vdom": record.vdom_name,
-                        "name": record.vip_name
-                }
-                LOG.debug(_("### message= %s" % message))
-                resp = self._driver.request("DELETE_FIREWALL_VIP", **message)
-                kwargs = {
-                    # "floating_ip_address": None,
-                    "bound": False
-                }
-                if not record.allocated:
-                    kwargs["vip_name"] = None
-                fortinet_db.update_record(context, record, **kwargs)
-                return True
-            except Exception:
-                LOG.error(_("### Exception= %s" % Exception))
-                raise Exception
-        return False
+        fortinet_db.delete_record(self, context,
+                        fortinet_db.Fortinet_FloatingIP_Allocation,
+                        vdom=db_namespace.vdom,
+                        floating_ip_address=db_fip.floating_ip_address,
+                        vip_name=db_fip.floating_ip_address)
 
-
-    def _get_mac(self, interface=None):
-        mac_address = None
-        if not interface:
-            interface = self._fortigate["int_interface"]
-        message = {
-        "name": interface
-        }
-        res = self._driver.request("GET_VLAN_INTERFACE", **message)
-        if res["http_status"] == httplib.OK:
-            mac_address = res["results"][0]["macaddr"]
-        LOG.debug(_("### mac_address= %s" % mac_address))
-        return mac_address
-
-    @staticmethod
-    def _get_ip_mask(ip_subnet, position=1):
-        try:
-            ip_mask = "%s %s" % (netaddr.IPNetwork(ip_subnet)[position],
-                                 netaddr.IPNetwork(ip_subnet).netmask)
-        except Exception:
-            raise Exception
-        return ip_mask
-
-    @staticmethod
-    def _get_ip(ip_subnet, position=1):
-        try:
-            ip = "%s" % netaddr.IPNetwork(ip_subnet)[position]
-        except Exception:
-            raise Exception
-        return ip
-
-    @staticmethod
-    def _get_vl_inf(session, vdom_name):
-        kwargs = {"vdom_name": vdom_name, "allocated": True}
-        cls = fortinet_db.Fortinet_Vlink_Vlan_Allocation
-        record = fortinet_db.get_record(session, cls, **kwargs)
-        if record:
-            return (record.inf_name_int_vdom, record.inf_name_ext_vdom)
-        return None
-
-    @staticmethod
-    def _get_srcintf(session, network_id):
-        ml2_network_seg = db.get_network_segments(session, network_id)
-        LOG.debug(_("### ml2_network_seg= %s" % ml2_network_seg))
-        srcintf = const.PREFIX["inf"] + \
-                  str(ml2_network_seg[0]["segmentation_id"])
-        return srcintf
 
     @staticmethod
     def _get_ipallocation(session, port_id=None, **kwargs):
@@ -1095,7 +651,7 @@ class FortinetL3ServicePlugin(router.L3RouterPlugin):
         if port_id:
             kwargs["port_id"] = port_id
         if kwargs:
-            return fortinet_db.get_record(session, cls, **kwargs)
+            return fortinet_db.query_record(session, cls, **kwargs)
         else:
             return None
 

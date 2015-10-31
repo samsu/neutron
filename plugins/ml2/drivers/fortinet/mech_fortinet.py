@@ -113,7 +113,8 @@ class FortinetMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             "tenant_network_type": cfg.CONF.ml2_fortinet.tenant_network_type,
             "vlink_vlan_id_range": cfg.CONF.ml2_fortinet.vlink_vlan_id_range,
             "vlink_ip_range": cfg.CONF.ml2_fortinet.vlink_ip_range,
-            "vip_mappedip_range": cfg.CONF.ml2_fortinet.vip_mappedip_range
+            "vip_mappedip_range": cfg.CONF.ml2_fortinet.vip_mappedip_range,
+            'npu': cfg.CONF.ml2_fortinet.npu
         }
 
         api_server = [(self._fortigate["address"], 80, False)]

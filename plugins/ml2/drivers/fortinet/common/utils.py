@@ -14,10 +14,12 @@
 
 import netaddr
 import json
+import httplib
 
 from neutron.db import l3_db
 from neutron.db import models_v2
 from neutron.openstack.common import log as logging
+from neutron.plugins.ml2 import models as ml2_db
 from neutron.plugins.ml2.drivers.fortinet.common import resources as resources
 from neutron.plugins.ml2.drivers.fortinet.common import constants as const
 from neutron.plugins.ml2.drivers.fortinet.tasks import constants as t_consts
@@ -44,9 +46,41 @@ def getid(context):
         raise ValueError("not get request_id")
     return id
 
+def get_mac(obj, context, interface=None):
+    if not interface:
+        interface = obj._fortigate['int_interface']
+    res = op(obj, context, resources.VlanInterface.get, name=interface)
+    if httplib.OK == res['http_status']:
+        return res['results'][0]['macaddr']
+    return None
+
 def getip(ipsubnet, place):
     return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
 
+def get_ipaddr(ip_subnet, place=1):
+    return str(netaddr.IPNetwork(ip_subnet)[place])
+
+def get_netmask(ip_subnet):
+    return str(netaddr.IPNetwork(ip_subnet).netmask)
+
+def get_srcintf(context, network_id):
+    ml2_net_seg = fortinet_db.query_record(context, ml2_db.NetworkSegment,
+                                           network_id=network_id)
+    if getattr(ml2_net_seg, 'segmentation_id'):
+        return const.PREFIX["inf"] + str(ml2_net_seg.segmentation_id)
+    return None
+
+def get_vlink_inf(obj, context, **kwargs):
+    if obj._fortigate.get('npu'):
+        vlink_vlan = fortinet_db.query_record(context,
+                            fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                            **kwargs)
+        return (vlink_vlan.inf_name_int_vdom, vlink_vlan.inf_name_ext_vdom)
+    else:
+        vdom_link = fortinet_db.query_record(context,
+                                             fortinet_db.Fortinet_Vdom_Vlink,
+                                             **kwargs)
+        return (vdom_link.name+str(1), vdom_link.name+str(0))
 
 def update_status(obj, context, status):
     obj.task_manager.update_status(getid(context), status)
@@ -170,6 +204,22 @@ def delete_fwpolicy(obj, context, **kwargs):
         except Exception as e:
             resources.Exinfo(e)
     fortinet_db.delete_record(context, cls, **kwargs)
+
+
+def head_firewall_policy(obj, context, **kwargs):
+    """
+    :param obj:
+    :param context:
+    :param kwargs: {
+        'vdom': osvdmxx,
+        'id': 5
+    }
+    :return:
+    """
+    res = op(obj, context, resources.FirewallPolicy.get, vdom=kwargs['vdom'])
+    if res.get('results'):
+        head = res['results'][0]['policyid']
+        op(obj, context, resources.FirewallPolicy.move, before=head, **kwargs)
 
 
 def add_resource(obj, context, cls, resource, **kwargs):
@@ -444,6 +494,66 @@ def delete_interface_ip(obj, context, **kwargs):
 
         op(obj, context, resources.VlanInterface.set, **kwargs)
         inf_db.update_record(context, inf_db, ip=kwargs['ip'])
+
+
+def add_secondaryip(obj, context, **kwargs):
+    """
+    :param obj:
+    :param context:
+    :param kwargs:
+            'name': vl_ext_xx,
+            'vdom': const.EXT_VDOM,
+            'ip': 'x.x.x.x x.x.x.x'
+    :return:
+    """
+    records = fortinet_db.query_records(context,
+                                fortinet_db.Fortinet_FloatingIP_Allocation,
+                                vdom=kwargs['vdom'],
+                                allocated=True)
+    secondaryips = []
+    for record in records:
+        secondaryips.append(getip(record.ip_subnet,1))
+
+    if op(obj, context, resources.VlanInterface.set, name=kwargs['name'],
+          vdom=kwargs['vdom'], secondaryips=secondaryips):
+        secondaryips.remove(kwargs['ip'])
+        rollback = {
+            'params': (
+                obj._driver,
+                {
+                    'name': kwargs['name'],
+                    'vdom': kwargs['vdom'],
+                    'secondaryips': secondaryips
+                }
+            ),
+            'func': resources.VlanInterface.set
+        }
+        obj.task_manager.add(getid(context), **rollback)
+
+
+def delete_secondaryip(obj, context, **kwargs):
+    """
+    :param obj:
+    :param context:
+    :param kwargs:
+            'name': vl_ext_xx,
+            'vdom': const.EXT_VDOM,
+            'ip': 'x.x.x.x x.x.x.x'
+    :return:
+    """
+    records = fortinet_db.query_records(context,
+                                fortinet_db.Fortinet_FloatingIP_Allocation,
+                                vdom=kwargs['vdom'],
+                                allocated=True)
+    secondaryips = []
+    for record in records:
+        secondaryip = getip(record.ip_subnet, 1)
+        if secondaryip == kwargs.get('ip'):
+            continue
+        secondaryips.append(secondaryip)
+
+    op(obj, context, resources.VlanInterface.set, name=kwargs['name'],
+          vdom=kwargs['vdom'], secondaryips=secondaryips)
 
 
 def set_ext_gw(obj, context, port):
