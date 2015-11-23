@@ -106,10 +106,8 @@ class ApiClientBase(object):
 
     def set_auth_cookie(self, conn, cookie):
         data = self._get_provider_data(conn)
-        LOG.debug(_("#### set_auth_cookie data=%s" % str(data)))
         if data:
             cookie = self.format_cookie(cookie)
-            LOG.debug(_("#### set_auth_cookie cookie=%s" % cookie))
             self._set_provider_data(conn, (data[0], cookie))
 
     def acquire_connection(self, auto_login=True, headers=None, rid=-1):
@@ -200,9 +198,7 @@ class ApiClientBase(object):
 
     def _wait_for_login(self, conn, headers=None):
         '''Block until a login has occurred for the current API provider.'''
-
         data = self._get_provider_data(conn)
-        LOG.debug(_("#### data=%s" % str(data)))
         if data is None:
             LOG.error(_("Login request for an invalid connection: '%s'"),
                       api_client.ctrl_conn_to_str(conn))
@@ -211,7 +207,6 @@ class ApiClientBase(object):
         if provider_sem.acquire(blocking=False):
             try:
                 cookie = self._login(conn, headers)
-                LOG.debug(_("#### cookie=%s" % cookie))
                 self.set_auth_cookie(conn, cookie)
             finally:
                 provider_sem.release()
@@ -242,8 +237,6 @@ class ApiClientBase(object):
             data: data to associate with API provider
         """
         conn_params = self._normalize_conn_params(conn_or_conn_params)
-        LOG.debug(_("#### _set_provider_data conn_params=%s" % str(conn_params)))
-        LOG.debug(_("#### _set_provider_data data=%s" % str(data)))
         if data is None:
             del self._api_provider_data[conn_params]
         else:

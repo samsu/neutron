@@ -16,59 +16,69 @@
 import netaddr
 
 PREFIX = {
-    "vdom": "osvdm",
-    "inf": "os_vid_",
-    "vint": "vl_int_",
-    "vext": "vl_ext_",
-    "netmask": 30,
-    "addrgrp": "addrgrp_"
+    'vdom': 'osvdm',
+    'inf': 'os_vid_',
+    'vint': '_0',
+    'vext': '_1',
+    'vdlink': '_',
+    'addrgrp': 'addrgrp_'
 }
 
-EXT_VDOM = "root"
-EXT_DEF_DST = "0.0.0.0 0.0.0.0"
-FIELD_DELIMITER = ":"
+POSTFIX = {
+    'vint': '_0',
+    'vext': '_1',
+    'vdlink': '_'
+}
+
+#EXT_VDOM = 'root'
+EXT_VDOM = 'osvdmext'
+EXT_DEF_DST = '0.0.0.0 0.0.0.0'
+DEF_GW = '0.0.0.0'
+FIELD_DELIMITER = ':'
 FORTINET_PARAMS = {
-    "vlink_vlan_id_range": {
-        "cls": "Fortinet_Vlink_Vlan_Allocation",
-        "type": int,
-        "format": True,
-        "range": range,
-        "keys": ("vlan_id",)
+    'vlink_vlan_id_range': {
+        'cls': 'Fortinet_Vlink_Vlan_Allocation',
+        'type': int,
+        'format': True,
+        'range': range,
+        'keys': ('vlanid',)
     },
-    "vlink_ip_range": {
-        "cls": "Fortinet_Vlink_IP_Allocation",
-        "type": netaddr.IPNetwork,
-        "format": False,
-        "range": netaddr.IPNetwork.subnet,
-        "keys": ("vlink_ip_subnet",)
+    'vlink_ip_range': {
+        'cls': 'Fortinet_Vlink_IP_Allocation',
+        'type': netaddr.IPNetwork,
+        'format': False,
+        'range': netaddr.IPNetwork.subnet,
+        'keys': ('vlink_ip_subnet',),
+        'netmask': 30
     },
-    "vip_mappedip_range": {
-        "cls": "Fortinet_FloatingIP_Allocation",
-        "type": netaddr.IPNetwork,
-        "format": False,
-        "range": netaddr.IPNetwork.subnet,
-        "keys": ("ip_subnet",)
+    'vip_mappedip_range': {
+        'cls': 'Fortinet_FloatingIP_Allocation',
+        'type': netaddr.IPNetwork,
+        'format': False,
+        'range': netaddr.IPNetwork.subnet,
+        'keys': ('ip_subnet',),
+        'netmask': 32
     }
 }
 
 
 # Define class
 FORTINET_MAPS = {
-    "vdom_link": {
-        "api": {
-            "get": "GET_VDOM_LNK",
+    'vdom_link': {
+        'api': {
+            'get': 'GET_VDOM_LNK',
         },
-        "cls": "Fortinet_Vlink_Vlan_Allocation",
-        "type": int,
-        "format": True,
-        "range": range,
-        "keys": ("vlan_id",)
+        'cls': 'Fortinet_Vlink_Vlan_Allocation',
+        'type': int,
+        'format': True,
+        'range': range,
+        'keys': ('vlanid',)
     },
-    "vlink_ip_range": {
-        "cls": "Fortinet_Vlink_IP_Allocation",
-        "type": netaddr.IPNetwork,
-        "format": False,
-        "range": netaddr.IPNetwork.subnet,
-        "keys": ("vlink_ip_subnet",)
+    'vlink_ip_range': {
+        'cls': 'Fortinet_Vlink_IP_Allocation',
+        'type': netaddr.IPNetwork,
+        'format': False,
+        'range': netaddr.IPNetwork.subnet,
+        'keys': ('vlink_ip_subnet',)
     }
 }

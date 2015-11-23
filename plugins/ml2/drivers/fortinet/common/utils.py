@@ -30,15 +30,35 @@ LOG = logging.getLogger(__name__)
 
 def add_record(obj, context, cls, **kwargs):
     res = cls.add_record(context, **kwargs)
+    if not res:
+        return res
     if res.get('rollback', {}):
         obj.task_manager.add(getid(context), **res['rollback'])
     return res.get('result', None)
+
 
 def op(obj, context, func, **data):
     res = func(obj._driver, data)
     if res.get('rollback', {}):
         obj.task_manager.add(getid(context), **res['rollback'])
     return res.get('result', res)
+
+
+def check(obj, context, vdom, resource=resources.VlanInterface):
+    vlink_vlan = fortinet_db.query_record(context,
+                     fortinet_db.Fortinet_Vlink_Vlan_Allocation, vdom=vdom)
+    if vlink_vlan:
+        try:
+            op(obj, context, resource.get,
+               vdom=vdom, name=vlink_vlan.inf_name_int_vdom)
+            op(obj, context, resource.get,
+               vdom=const.EXT_VDOM, name=vlink_vlan.inf_name_ext_vdom)
+        except exception.ResourceNotFound as e:
+            import inspect
+            caller = inspect.stack()[1][3]
+            LOG.debug(_("#### Check vlink interface failed on the %(func)s."),
+            {'func': caller})
+            resources.Exinfo(e)
 
 def getid(context):
     id = getattr(context, 'request_id', None)
@@ -55,7 +75,7 @@ def get_mac(obj, context, interface=None):
     return None
 
 def getip(ipsubnet, place):
-    return "%s %s" % (ipsubnet[place], ipsubnet.netmask)
+    return "%s %s" % (get_ipaddr(ipsubnet, place), get_netmask(ipsubnet))
 
 def get_ipaddr(ip_subnet, place=1):
     return str(netaddr.IPNetwork(ip_subnet)[place])
@@ -63,24 +83,22 @@ def get_ipaddr(ip_subnet, place=1):
 def get_netmask(ip_subnet):
     return str(netaddr.IPNetwork(ip_subnet).netmask)
 
-def get_srcintf(context, network_id):
+def get_segmentation_id(context, network_id):
     ml2_net_seg = fortinet_db.query_record(context, ml2_db.NetworkSegment,
                                            network_id=network_id)
-    if getattr(ml2_net_seg, 'segmentation_id'):
-        return const.PREFIX["inf"] + str(ml2_net_seg.segmentation_id)
-    return None
+    return getattr(ml2_net_seg, 'segmentation_id', None)
 
-def get_vlink_inf(obj, context, **kwargs):
-    if obj._fortigate.get('npu'):
-        vlink_vlan = fortinet_db.query_record(context,
-                            fortinet_db.Fortinet_Vlink_Vlan_Allocation,
-                            **kwargs)
-        return (vlink_vlan.inf_name_int_vdom, vlink_vlan.inf_name_ext_vdom)
-    else:
-        vdom_link = fortinet_db.query_record(context,
-                                             fortinet_db.Fortinet_Vdom_Vlink,
-                                             **kwargs)
-        return (vdom_link.name+str(1), vdom_link.name+str(0))
+def get_intf(context, network_id):
+    vlanid = get_segmentation_id(context, network_id=network_id)
+    return const.PREFIX['inf'] + str(vlanid) if vlanid else None
+
+def backup_fields(record, **kwargs):
+    rbkwargs = {}
+    for key in kwargs:
+        if hasattr(record, key):
+            rbkwargs.setdefault(key, record.key)
+    return rbkwargs
+
 
 def update_status(obj, context, status):
     obj.task_manager.update_status(getid(context), status)
@@ -88,6 +106,93 @@ def update_status(obj, context, status):
 def _rollback_on_err(obj, context, err):
     update_status(obj, context, t_consts.TaskStatus.ROLLBACK)
     resources.Exinfo(err)
+
+
+def add_by_keys(obj, context, cls, resource, *keys, **kwargs):
+    record = add_record(obj, context, cls, **kwargs)
+    add_resource_with_keys(obj, context, record, resource, *keys, **kwargs)
+    return record
+
+
+def delete_by_keys(obj, context, cls, resource, *keys, **kwargs):
+    record = fortinet_db.query_record(context, cls, **kwargs)
+    delete_resource_with_keys(obj, context, record, resource, *keys)
+    return fortinet_db.delete_record(context, cls, **kwargs)
+
+
+def add_resource_with_keys(obj, context, record, resource, *keys, **kwargs):
+    if record:
+        try:
+            params = {key: getattr(record, key, None) for key in keys
+                                              if getattr(record, key, None)}
+            op(obj, context, resource.get, **params)
+        except exception.ResourceNotFound as e:
+            op(obj, context, resource.add, **kwargs)
+
+def delete_resource_with_keys(obj, context, record, resource, *keys):
+    if record:
+        try:
+            params = {key: getattr(record, key, None) for key in keys
+                                              if getattr(record, key, None)}
+            op(obj, context, resource.get, **params)
+            op(obj, context, resource.delete, **params)
+        except exception.ResourceNotFound as e:
+            resources.Exinfo(e)
+            pass
+
+
+def add_resource_with_name(obj, context, record, resource, **kwargs):
+    return add_resource_with_keys(obj, context, record, resource,
+                                  'vdom', 'name', **kwargs)
+
+def delete_resource_with_name(obj, context, record, resource):
+    return delete_resource_with_keys(obj, context, record, resource,
+                                     'vdom', 'name')
+
+def add_resource_with_id(obj, context, record, resource, **kwargs):
+    if getattr(record, 'edit_id', None):
+        try:
+            res = op(obj, context, resource.get,
+                     vdom=record.vdom, id=record.edit_id)
+            return res
+        except exception.ResourceNotFound:
+            pass
+    return op(obj, context, resource.add, **kwargs)
+
+
+def delete_resource_with_id(obj, context, record, resource):
+    if getattr(record, 'edit_id', None):
+        try:
+            op(obj, context, resource.get, vdom=record.vdom, id=record.edit_id)
+            op(obj, context, resource.delete,
+               vdom=record.vdom, id=record.edit_id)
+            return True
+        except Exception as e:
+            resources.Exinfo(e)
+    return False
+
+
+def add_by_name(obj, context, cls, resource, **kwargs):
+    return add_by_keys(obj, context, cls, resource, 'vdom', 'name', **kwargs)
+
+
+def delete_by_name(obj, context, cls, resource, **kwargs):
+    return delete_by_keys(obj, context, cls, resource,
+                          'vdom', 'name', **kwargs)
+
+
+def add_by_id(obj, context, cls, resource, **kwargs):
+    record = add_record(obj, context, cls, **kwargs)
+    res = add_resource_with_id(obj, context, record, resource, **kwargs)
+    if not getattr(record, 'edit_id'):
+        cls.update_record(context, record, edit_id=res['results']['mkey'])
+    return record
+
+
+def delete_by_id(obj, context, cls, resource, **kwargs):
+    record = fortinet_db.query_record(context, cls, **kwargs)
+    delete_resource_with_id(obj, context, record, resource)
+    fortinet_db.delete_record(context, cls, **kwargs)
 
 
 def add_vdom(obj, context, **kwargs):
@@ -102,7 +207,7 @@ def add_vdom(obj, context, **kwargs):
 
 def delete_vdom(obj, context, **kwargs):
     cls = fortinet_db.Fortinet_ML2_Namespace
-    namespace = fortinet_db.query_record(obj, context, cls, **kwargs)
+    namespace = fortinet_db.query_record(context, cls, **kwargs)
     if namespace:
         try:
             op(obj, context, resources.Vdom.get, name=namespace.vdom)
@@ -111,6 +216,58 @@ def delete_vdom(obj, context, **kwargs):
             resources.Exinfo(e)
         fortinet_db.delete_record(context, cls, **kwargs)
     return namespace
+
+
+def add_vdomlink(obj, context, **kwargs):
+    cls = fortinet_db.Fortinet_Vdom_Vlink
+    record = add_record(obj, context, cls, **kwargs)
+    add_resource_with_keys(obj, context, record, resources.VdomLink,
+                           'name', name=getattr(record, 'name', None))
+    return record
+
+
+def delete_vdomlink(obj, context, **kwargs):
+    return delete_by_keys(obj, context, fortinet_db.Fortinet_Vdom_Vlink,
+                          resources.VdomLink, 'name', **kwargs)
+
+
+def add_vlanintf(obj, context, **kwargs):
+    if kwargs.has_key('alias') and kwargs.get('alias', None):
+        kwargs['alias'] = kwargs['alias'][:32]
+    return add_by_name(obj, context,
+                       fortinet_db.Fortinet_Interface,
+                       resources.VlanInterface,
+                       **kwargs)
+
+
+def set_vlanintf(obj, context, **kwargs):
+    cls = fortinet_db.Fortinet_Interface
+    record = fortinet_db.query_record(context, cls, **kwargs)
+    rbkwargs = backup_fields(record, **kwargs)
+    cls.update_record(context, record, **kwargs)
+    pass
+
+
+def delete_vlanintf(obj, context, **kwargs):
+    return delete_by_name(obj, context,
+                          fortinet_db.Fortinet_Interface,
+                          resources.VlanInterface,
+                          **kwargs)
+
+
+def add_dhcpserver(obj, context, **kwargs):
+    cls = fortinet_db.Fortinet_ML2_Subnet
+    record = add_record(obj, context, cls, **kwargs)
+    kwargs.pop('subnet_id', None)
+    res = add_resource_with_id(obj, context, record,
+                               resources.DhcpServer, **kwargs)
+    if not record.edit_id:
+        cls.update_record(context, record, edit_id=res['results']['mkey'])
+
+
+def delete_dhcpserver(obj, context, **kwargs):
+    return delete_by_id(obj, context, fortinet_db.Fortinet_ML2_Subnet,
+                        resources.DhcpServer, **kwargs)
 
 
 def add_reservedip(obj, context, **kwargs):
@@ -129,7 +286,7 @@ def add_reservedip(obj, context, **kwargs):
                                         'mac': rsrvdip.mac })
 
         op(obj, context, resources.DhcpServerRsvAddr.set,
-           id=db_subnet.mkey,
+           id=db_subnet.edit_id,
            vdom=kwargs.get('vdom'),
            reserved_address=json.dumps(reserved_addresses))
         # TODO: add rollback of dhcpserver set
@@ -137,7 +294,7 @@ def add_reservedip(obj, context, **kwargs):
 
 def delete_reservedip(obj, context, **kwargs):
     cls = fortinet_db.Fortinet_ML2_ReservedIP
-    reserved_ip = fortinet_db.query_record(obj, context, cls, **kwargs)
+    reserved_ip = fortinet_db.query_record(context, cls, **kwargs)
 
     if reserved_ip:
         db_reservedips = fortinet_db.query_records(context, cls,
@@ -152,59 +309,62 @@ def delete_reservedip(obj, context, **kwargs):
                                              fortinet_db.Fortinet_ML2_Subnet,
                                              subnet_id=reserved_ip.subnet_id)
         if db_subnet:
-            op(obj, context, resources.DhcpServer.set,
-               id=db_subnet.mkey,
+            op(obj, context, resources.DhcpServerRsvAddr.set,
+               id=db_subnet.edit_id,
                vdom=reserved_ip.vdom,
                reserved_address=json.dumps(reserved_addresses))
         fortinet_db.delete_record(context, cls, **kwargs)
 
 
 def add_fwaddress(obj, context, **kwargs):
-    return add_resource(obj, context, fortinet_db.Fortinet_Firewall_Address,
-                        resources.FirewallAddress, **kwargs)
+    return add_by_name(obj, context,
+                       fortinet_db.Fortinet_Firewall_Address,
+                       resources.FirewallAddress,
+                       **kwargs)
 
 
 def delete_fwaddress(obj, context, **kwargs):
-    return delete_resource(obj, context, fortinet_db.Fortinet_Firewall_Address,
-                           resources.FirewallAddress, **kwargs)
+    return delete_by_name(obj, context,
+                          fortinet_db.Fortinet_Firewall_Address,
+                          resources.FirewallAddress,
+                          **kwargs)
 
 
 def add_fwippool(obj, context, **kwargs):
-    return add_resource(obj, context, fortinet_db.Fortinet_Firewall_IPPool,
-                        resources.FirewallIppool, **kwargs)
+    return add_by_name(obj, context,
+                       fortinet_db.Fortinet_Firewall_IPPool,
+                       resources.FirewallIppool,
+                       **kwargs)
 
 
 def delete_fwippool(obj, context, **kwargs):
-    return delete_resource(obj, context, fortinet_db.Fortinet_Firewall_IPPool,
-                           resources.FirewallIppool, **kwargs)
+    return delete_by_name(obj, context,
+                          fortinet_db.Fortinet_Firewall_IPPool,
+                          resources.FirewallIppool,
+                          **kwargs)
 
 
 def add_fwpolicy(obj, context, **kwargs):
-    record = add_record(obj, context,
-                        fortinet_db.Fortinet_Firewall_Policy, **kwargs)
-    if getattr(record, 'edit_id'):
-        try:
-            op(obj, context, resources.FirewallIppool.get,
-               vdom=record.vdom, id=record.edit_id)
-            return record
-        except exception.ResourceNotFound:
-            pass
-    res = op(obj, context, resources.Fortinet_Firewall_Policy.add, **kwargs)
-    record.update(context, record, edit_id=res['mkey'])
-    return record
+    return add_by_id(obj, context,
+                     fortinet_db.Fortinet_Firewall_Policy,
+                     resources.FirewallPolicy,
+                     **kwargs)
 
 
 def delete_fwpolicy(obj, context, **kwargs):
-    cls = fortinet_db.Fortinet_Firewall_Policy
-    record = fortinet_db.query_record(context, cls, **kwargs)
-    if getattr(record, 'edit_id'):
-        try:
-            op(obj, context, resources.FirewallPolicy.delete,
-               vdom=record.vdom, id=record.edit_id)
-        except Exception as e:
-            resources.Exinfo(e)
-    fortinet_db.delete_record(context, cls, **kwargs)
+    return delete_by_id(obj, context,
+                        fortinet_db.Fortinet_Firewall_Policy,
+                        resources.FirewallPolicy,
+                        **kwargs)
 
+def delete_fwpolicies(obj, context, **kwargs):
+    records = fortinet_db.query_records(context,
+                                        fortinet_db.Fortinet_Firewall_Policy,
+                                        **kwargs)
+    for record in records:
+        delete_by_id(obj, context, fortinet_db.Fortinet_Firewall_Policy,
+                     resources.FirewallPolicy,
+                     vdom=record.vdom, edit_id=record.edit_id)
 
 def head_firewall_policy(obj, context, **kwargs):
     """
@@ -222,36 +382,45 @@ def head_firewall_policy(obj, context, **kwargs):
         op(obj, context, resources.FirewallPolicy.move, before=head, **kwargs)
 
 
-def add_resource(obj, context, cls, resource, **kwargs):
-    record = add_record(obj, context, cls, **kwargs)
-    if record:
-        try:
-            op(obj, context, resource.get, vdom=record.vdom, name=record.name)
-        except exception.ResourceNotFound:
-            op(obj, context, resource.add, **kwargs)
-    return record
-
-
-def delete_resource(obj, context, cls, resource, **kwargs):
-    record = fortinet_db.query_record(context, cls, **kwargs)
-    if record:
-        try:
-            op(obj, context, resource.get, vdom=record.vdom, name=record.name)
-            op(obj, context, resource.delete,
-               vdom=record.vdom, name=record.name)
-        except exception.ResourceNotFound:
-            pass
-    return fortinet_db.delete_record(context, cls, **kwargs)
-
-
 def add_vip(obj, context, **kwargs):
-    return add_resource(obj, context, fortinet_db.Fortinet_Firewall_VIP,
-                        resources.FirewallVip, **kwargs)
+    return add_by_name(obj, context,
+                       fortinet_db.Fortinet_Firewall_VIP,
+                       resources.FirewallVip,
+                       **kwargs)
 
 
 def delete_vip(obj, context, **kwargs):
-    return delete_resource(obj, context, fortinet_db.Fortinet_Firewall_VIP,
-                           resources.FirewallVip, **kwargs)
+    return delete_by_name(obj, context,
+                          fortinet_db.Fortinet_Firewall_VIP,
+                          resources.FirewallVip,
+                          **kwargs)
+
+
+def add_routerstatic(obj, context, **kwargs):
+    cls = fortinet_db.Fortinet_Static_Router
+    record = add_record(obj, context, cls, **kwargs)
+    kwargs.pop('subnet_id', None)
+    res = add_resource_with_id(obj, context, record,
+                               resources.RouterStatic, **kwargs)
+    if not getattr(record, 'edit_id'):
+        cls.update_record(context, record, edit_id=res['results']['mkey'])
+    return record
+
+
+def delete_routerstatic(obj, context, **kwargs):
+    return delete_by_id(obj, context,
+                        fortinet_db.Fortinet_Static_Router,
+                        resources.RouterStatic,
+                        **kwargs)
+
+def delete_routerstatics(obj, context, **kwargs):
+    records = fortinet_db.query_records(context,
+                                        fortinet_db.Fortinet_Static_Router,
+                                        **kwargs)
+    for record in records:
+        delete_routerstatic(obj, context,
+                            vdom=record.vdom,
+                            edit_id=record.edit_id)
 
 
 def add_addrgrp(obj, context, **kwargs):
@@ -271,15 +440,13 @@ def add_addrgrp(obj, context, **kwargs):
         record = fortinet_db.query_record(context, cls,
                                           name=name, vdom=kwargs['vdom'])
         if not record.group:
-            record.update_record(context, record, group=kwargs['name'])
+            cls.update_record(context, record, group=kwargs['name'])
             # TODO: need to add a rollback action to taskmanager
         else:
             LOG.debug(_("The member %(record)s already joined a group"),
                       {"record": record})
-
     for record in records:
         kwargs['members'].append(record.name)
-
     try:
         op(obj, context, resources.FirewallAddrgrp.get,
            name=kwargs['name'], vdom=kwargs['vdom'])
@@ -295,7 +462,7 @@ def delete_addrgrp(obj, context, **kwargs):
     :param kwargs:
         example format
         {
-            "name": "osvdm1_net",
+            "name": "addrgrp_osvdm1",
             "vdom": "osvdm1",
             "members": ["192.168.10.0", "192.168.33.0"]
         }
@@ -303,7 +470,7 @@ def delete_addrgrp(obj, context, **kwargs):
         the specific firewall address group in FGT.
     """
     cls = fortinet_db.Fortinet_Firewall_Address
-    records = fortinet_db.query_records(context, cls, group=kwargs["name"])
+    records = fortinet_db.query_records(context, cls, group=kwargs['name'])
     if not records:
         LOG.debug(_("There is not any record in db"))
         return
@@ -314,15 +481,9 @@ def delete_addrgrp(obj, context, **kwargs):
         kwargs['members'] = members
         op(obj, context, resources.FirewallAddrgrp.set, **kwargs)
     else:
-        try:
-            op(obj, context, resources.FirewallPolicy.delete,
-               vdom=kwargs.get('vdom'),
-               srcintf='any',
-               srcaddr=kwargs['name'],
-               dstintf='any',
-               nat='disable')
-        except Exception as e:
-            resources.Exinfo(e)
+        delete_fwpolicy(obj, context, vdom=kwargs.get('vdom'),
+                        srcintf='any', srcaddr=kwargs['name'],
+                        dstintf='any', nat='disable')
         try:
             del kwargs['members']
             op(obj, context, resources.FirewallAddrgrp.delete, **kwargs)
@@ -333,42 +494,81 @@ def delete_addrgrp(obj, context, **kwargs):
             record.update_record(context, record, group=None)
 
 
-def fortinet_add_vlink(obj, context, vdom):
+def add_vlink_intf(obj, context, vlink_vlan, vlink_ip):
+    vdom = getattr(vlink_vlan, 'vdom')
+    ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
+    if obj._fortigate.get('npu_available'):
+        intf_ext, intf_int = 'npu0_vlink0', 'npu0_vlink1'
+        add_vlanintf(obj, context,
+                     name=vlink_vlan.inf_name_ext_vdom,
+                     vdom=const.EXT_VDOM,
+                     vlanid=vlink_vlan.vlanid,
+                     interface=intf_ext,
+                     ip=getip(ipsubnet, 1))
+        add_vlanintf(obj, context,
+                     name=vlink_vlan.inf_name_int_vdom,
+                     vdom=vdom,
+                     vlanid=vlink_vlan.vlanid,
+                     interface=intf_int,
+                     ip=getip(ipsubnet, 2))
+    else:
+        add_vdomlink(obj, context, vdom=vdom)
+        op(obj, context, resources.VlanInterface.set,
+                     name=vlink_vlan.inf_name_ext_vdom,
+                     vdom=const.EXT_VDOM,
+                     ip=getip(ipsubnet, 1))
+        op(obj, context, resources.VlanInterface.set,
+                     name=vlink_vlan.inf_name_int_vdom,
+                     vdom=vdom,
+                     ip=getip(ipsubnet, 2))
+
+
+def get_vlink_intf(obj, context, **kwargs):
+    vlink_vlan = fortinet_db.query_record(context,
+                        fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                        **kwargs)
+    if not vlink_vlan and kwargs.get('vdom', None):
+        return add_vlink(obj, context, kwargs['vdom'])
+    return (vlink_vlan.inf_name_int_vdom, vlink_vlan.inf_name_ext_vdom)
+
+
+def delete_vlink_intf(obj, context, vlink_vlan):
+    vdom = getattr(vlink_vlan, 'vdom')
+    if obj._fortigate.get('npu_available'):
+        delete_vlanintf(obj, context,
+                        name=vlink_vlan.inf_name_int_vdom,
+                        vdom=vdom)
+        delete_vlanintf(obj, context,
+                        name=vlink_vlan.inf_name_ext_vdom,
+                        vdom=const.EXT_VDOM)
+    else:
+        delete_vdomlink(obj, context, vdom=vdom)
+
+
+def add_vlink(obj, context, vdom):
     vlink_vlan = add_record(obj, context,
                         fortinet_db.Fortinet_Vlink_Vlan_Allocation,
                         vdom=vdom)
     vlink_ip = add_record(obj, context,
                         fortinet_db.Fortinet_Vlink_IP_Allocation,
                         vdom=vdom,
-                        vlan_id=vlink_vlan.vlan_id)
+                        vlink_id=vlink_vlan.id)
     if vlink_ip:
-        ipsubnet = netaddr.IPNetwork(vlink_ip.vlink_ip_subnet)
-        try:
-            op(obj, context, resources.VlanInterface.get,
-                     name=vlink_vlan.inf_name_ext_vdom,
-                     vdom=const.EXT_VDOM)
-        except exception.ResourceNotFound:
-            op(obj, context, resources.VlanInterface.add,
-                     name=vlink_vlan.inf_name_ext_vdom,
-                     vdom=const.EXT_VDOM,
-                     vlanid=vlink_vlan.vlan_id,
-                     interface="npu0_vlink0",
-                     ip=getip(ipsubnet, 1))
-        try:
-            op(obj, context, resources.VlanInterface.get,
-                     name=vlink_vlan.inf_name_int_vdom,
-                     vdom=vdom)
-
-        except exception.ResourceNotFound:
-            op(obj, context, resources.VlanInterface.add,
-                     name=vlink_vlan.inf_name_int_vdom,
-                     vdom=vdom,
-                     vlanid=vlink_vlan.vlan_id,
-                     interface="npu0_vlink1",
-                     ip=getip(ipsubnet, 2))
+        add_vlink_intf(obj, context, vlink_vlan, vlink_ip)
+        add_routerstatic(obj, context,
+                         vdom=vdom,
+                         dst=const.EXT_DEF_DST,
+                         device=vlink_vlan.inf_name_int_vdom,
+                         gateway=const.DEF_GW)
+        #add_fwpolicy(obj, context,
+        #             vdom=const.EXT_VDOM,
+        #             srcintf=vlink_vlan.inf_name_ext_vdom,
+        #             dstintf=obj._fortigate['ext_interface'],
+        #             nat='enable')
+    return (vlink_vlan.inf_name_int_vdom, vlink_vlan.inf_name_ext_vdom)
 
 
-def fortinet_delete_vlink(obj, context, tenant_id):
+def delete_vlink(obj, context, tenant_id):
     vdom = fortinet_db.query_record(context,
                                     fortinet_db.Fortinet_ML2_Namespace,
                                    tenant_id=tenant_id).vdom
@@ -378,40 +578,32 @@ def fortinet_delete_vlink(obj, context, tenant_id):
                             allocated=True)
     if not vlink_vlan:
         return False
-
     vlink_ip = fortinet_db.query_record(context,
                               fortinet_db.Fortinet_Vlink_IP_Allocation,
                               vdom=vdom,
-                              vlan_id=vlink_vlan.vlan_id,
+                              vlink_id=vlink_vlan.id,
                               allocated=True)
     if not vlink_ip:
         return False
-    try:
-        op(obj, context, resources.VlanInterface.delete,
-                 name=vlink_vlan.inf_name_ext_vdom, vdom=const.EXT_VDOM)
-    except exception.ResourceNotFound:
-        LOG.exception(_("The vdom link %(vlink)s in the %(vdom)s "
-                        "already was deleted.") %
-                      ({'vlink': vlink_vlan.inf_name_ext_vdom,
-                        'vdom':const.EXT_VDOM}))
-    try:
-        op(obj, context, resources.VlanInterface.delete,
-                 name=vlink_vlan.inf_name_int_vdom, vdom=vdom)
-    except exception.ResourceNotFound:
-        LOG.debug(_("The vdom link %(vlink)s in the %(vdom)s "
-                        "already was deleted.") %
-                      ({'vlink': vlink_vlan.inf_name_ext_vdom,
-                        'vdom':const.EXT_VDOM}))
-    try:
-        fortinet_db.delete_record(context,
-                                  fortinet_db.Fortinet_Vlink_Vlan_Allocation,
-                                  vdom=vdom)
-        fortinet_db.delete_record(context,
-                                  fortinet_db.Fortinet_Vlink_IP_Allocation,
-                                  vdom=vdom)
-    except:
-        LOG.debug(_("Failed to delete vlink"))
-        raise Exception(_("Failed to delete vlink"))
+    """
+    delete_fwpolicy(obj, context,
+                    vdom=const.EXT_VDOM,
+                    srcintf=vlink_vlan.inf_name_ext_vdom,
+                    dstintf=obj._fortigate['ext_interface'],
+                    nat='enable')"""
+    delete_routerstatic(obj, context,
+                        vdom=vdom,
+                        dst=const.EXT_DEF_DST,
+                        device=vlink_vlan.inf_name_int_vdom,
+                        gateway=const.DEF_GW)
+    delete_vlink_intf(obj, context, vlink_vlan)
+    fortinet_db.delete_record(context,
+                        fortinet_db.Fortinet_Vlink_IP_Allocation,
+                        vdom=vdom,
+                        vlink_id=vlink_vlan.id)
+    fortinet_db.delete_record(context,
+                        fortinet_db.Fortinet_Vlink_Vlan_Allocation,
+                        id=vlink_vlan.id)
     return True
 
 
@@ -515,14 +707,14 @@ def add_secondaryip(obj, context, **kwargs):
         secondaryips.append(getip(record.ip_subnet,1))
 
     if op(obj, context, resources.VlanInterface.set, name=kwargs['name'],
-          vdom=kwargs['vdom'], secondaryips=secondaryips):
+          vdom=const.EXT_VDOM, secondaryips=secondaryips):
         secondaryips.remove(kwargs['ip'])
         rollback = {
             'params': (
                 obj._driver,
                 {
                     'name': kwargs['name'],
-                    'vdom': kwargs['vdom'],
+                    'vdom': const.EXT_VDOM,
                     'secondaryips': secondaryips
                 }
             ),
@@ -590,15 +782,17 @@ def set_ext_gw(obj, context, port):
     if not tenant_id:
         raise ValueError
 
-    namespace = fortinet_add_vdom(obj, context, tenant_id=tenant_id)
-    fortinet_add_vlink(obj, context, namespace.vdom)
+    namespace = add_vdom(obj, context, tenant_id=tenant_id)
+    add_vlink(obj, context, namespace.vdom)
     vlink_db = fortinet_db.query_record(context,
                                 fortinet_db.Fortinet_Vlink_Vlan_Allocation,
                                 vdom=namespace.vdom)
 
     ip_address = port['fixed_ips'][0]['ip_address']
+
     add_fwippool(obj, context, vdom=const.EXT_VDOM,
                  name=ip_address, startip=ip_address)
+
     add_fwpolicy(obj, context,
                  vdom=const.EXT_VDOM,
                  srcintf=vlink_db.inf_name_ext_vdom,
@@ -616,8 +810,6 @@ def set_ext_gw(obj, context, port):
 
 def clr_ext_gw(obj, context, port):
     ip_address = port['fixed_ips'][0]['ip_address']
-    delete_fwpolicy(obj, context, vdom=const.EXT_VDOM, poolname=ip_address)
-    delete_fwippool(obj, context, vdom=const.EXT_VDOM, name=ip_address)
     subnetv2_db = fortinet_db.query_record(context, models_v2.Subnet,
                                     id=port['fixed_ips'][0]['subnet_id'])
     netmask = netaddr.IPNetwork(subnetv2_db.cidr).netmask
@@ -626,3 +818,17 @@ def clr_ext_gw(obj, context, port):
                         name=obj._fortigate['ext_interface'],
                         vdom=const.EXT_VDOM,
                         ip=ip)
+    delete_fwpolicy(obj, context, vdom=const.EXT_VDOM, poolname=ip_address)
+    delete_fwippool(obj, context, vdom=const.EXT_VDOM, name=ip_address)
+    router_db = fortinet_db.query_record(context, l3_db.Router,
+                                         id=port['device_id'])
+    tenant_id = router_db.get('tenant_id', None)
+    if tenant_id:
+        delete_vlink(obj, context, tenant_id=tenant_id)
+        if not [ getattr(record, 'gw_port_id', None) for record in
+                 fortinet_db.query_records(context, l3_db.Router,
+                                           tenant_id=tenant_id)
+                         if getattr(record, 'gw_port_id', None)] and \
+           not fortinet_db.query_count(context, models_v2.Network,
+                                       tenant_id=tenant_id):
+            delete_vdom(obj, context, tenant_id=tenant_id)

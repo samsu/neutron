@@ -68,8 +68,8 @@ class EventletApiRequest(request.ApiRequest):
 
         self._request_error = None
 
-        #if "User-Agent" not in self._headers:
-        #    self._headers["User-Agent"] = USER_AGENT
+        if "User-Agent" not in self._headers:
+            self._headers["User-Agent"] = USER_AGENT
 
         self._green_thread = None
         # Retrieve and store this instance's unique request id.
@@ -89,11 +89,6 @@ class EventletApiRequest(request.ApiRequest):
         '''Spawn a new green thread with the supplied function and args.'''
         return self.__class__._spawn(func, *args, **kwargs)
 
-    @classmethod
-    def joinall(cls):
-        '''Wait for all outstanding requests to complete.'''
-        return cls.API_REQUEST_POOL.waitall()
-
     def join(self):
         '''Wait for instance green thread to complete.'''
         if self._green_thread is not None:
@@ -103,13 +98,6 @@ class EventletApiRequest(request.ApiRequest):
     def start(self):
         '''Start request processing.'''
         self._green_thread = self.spawn(self._run)
-
-    def copy(self):
-        '''Return a copy of this request instance.'''
-        return EventletApiRequest(
-            self._api_client, self._url, self._method, self._body,
-            self._headers, self._retries,
-            self._auto_login, self._redirects, self._http_timeout)
 
     def _run(self):
         '''Method executed within green thread.'''

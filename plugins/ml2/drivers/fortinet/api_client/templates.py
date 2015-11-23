@@ -43,7 +43,6 @@ LOGOUT = """
 }
 """
 
-
 # Create VLAN
 ADD_VLAN_INTERFACE = """
 {
@@ -57,7 +56,9 @@ ADD_VLAN_INTERFACE = """
             #else
             "name": "os_vid_$vlanid",
             #end if
-            "vlanid": "$vlanid",
+            #if $varExists('vlanid')
+                "vlanid": "$vlanid",
+            #end if
             "interface": "$interface",
             "vdom": "$vdom",
             "type": "vlan",
@@ -86,7 +87,7 @@ SET_VLAN_INTERFACE = """
         "name": "interface",
         "json": {
             #if $varExists('ip') and $ip != None
-                "ip": "$ip $netmask",
+                "ip": "$ip",
                 "mode": "static",
                 "allowaccess": "ping https ssh snmp http fgfm capwap",
             #end if
@@ -96,20 +97,12 @@ SET_VLAN_INTERFACE = """
                     "secondaryip": [
                     #for $secondaryip in $secondaryips[:-1]
                         {
-                            #if $varExists('netmask')
-                                "ip": "$secondaryip $netmask",
-                            #else
-                                "ip": "$secondaryip",
-                            #end if
+                            "ip": "$secondaryip",
                             "allowaccess": "ping https ssh snmp http fgfm capwap"
                         },
                     #end for
                         {
-                            #if $varExists('netmask')
-                                "ip": "$secondaryips[-1] $netmask",
-                            #else
-                                "ip": "$secondaryips[-1]",
-                            #end if
+                            "ip": "$secondaryips[-1]",
                             "allowaccess": "ping https ssh snmp http fgfm capwap"
                         }
                     ],
@@ -127,18 +120,19 @@ SET_VLAN_INTERFACE = """
 }
 """
 
-# Delete VLAN (vlan_id)
+# Delete VLAN (vlan id)
 DELETE_VLAN_INTERFACE = """
 {
-    "path": "/api/v2/cmdb/system/interface/",
+    "path": "/api/v2/cmdb/system/interface/$name",
     "method": "DELETE",
     "body": {
         "name": "interface",
         "json": {
             #if $varExists('vdom')
-            "vdom": "$vdom",
+            "vdom": "$vdom"
+            #else
+            "vdom": "root"
             #end if
-            "name": "$name"
         }
     }
 }

@@ -26,11 +26,11 @@ from neutron.plugins.ml2.drivers.fortinet.api_client import eventlet_client
 from neutron.plugins.ml2.drivers.fortinet.api_client import eventlet_request
 from neutron.plugins.ml2.drivers.fortinet.api_client import exception
 from neutron.plugins.ml2.drivers.fortinet.api_client import templates
-
+from neutron.plugins.ml2.drivers.fortinet.common import singleton
 
 LOG = logging.getLogger(__name__)
 
-
+@singleton.singleton
 class FortiosApiClient(eventlet_client.EventletApiClient):
     """The FortiOS API Client."""
 
@@ -41,7 +41,8 @@ class FortiosApiClient(eventlet_client.EventletApiClient):
                  connect_timeout=base.DEFAULT_CONNECT_TIMEOUT,
                  http_timeout=75, retries=2, redirects=2):
         '''Constructor. Adds the following:
-
+        :param api_providers: a list of tuples of the form: (host, port,
+            is_ssl)
         :param http_timeout: how long to wait before aborting an
             unresponsive controller (and allow for retries to another
             controller in the cluster)
@@ -73,33 +74,7 @@ class FortiosApiClient(eventlet_client.EventletApiClient):
         '''
         if not message:
             message = {}
-        LOG.debug(_("##### message=%s" % message))
         return json.loads(unicode(Template(template, message)))
-
-
-    def msg_login(self, user, password):
-        '''Login to Fortigate.
-
-        Assumes same password is used for all controllers.
-        :param user: controller user (usually admin). Provided for
-                backwards compatibility. In the  normal mode of operation
-                this should be None.
-        :param password: controller password. Provided for backwards
-                compatibility. In the normal mode of operation this should
-                be None.
-        '''
-        if user:
-            return self._render(templates.LOGIN,
-                                username=user, secretkey=password)
-        LOG.error(_('No username was assigned, username:%(username)s '
-                    'and password:%(password)s'),
-                  {'username': self._user, 'password': self._password})
-
-
-    def logout(self):
-        '''Logout to Fortigate.
-        '''
-        self.request("LOGOUT")
 
 
     def request(self, opt, content_type="application/json", **message):
@@ -155,211 +130,3 @@ class FortiosApiClient(eventlet_client.EventletApiClient):
             return response.body
         else:
             return json.loads(response.body)
-
-
-if __name__ == "__main__":
-    import time
-    api = [("10.160.37.95", 80, False)]
-    user = "admin"
-    password = ""
-    cli = FortiosApiClient(api, user, password)
-    print "----------"
-    message = {
-        "name": "ext_4093",
-        "vlanid": 4093,
-        "vdom": "root",
-        "interface": "port1",
-        "ip": "192.168.30.254 255.255.255.0"
-    }
-    cli.request("ADD_VLAN_INTERFACE", **message)
-    message = {
-        "name": "port5",
-        "vdom": "root",
-        "ip": "192.168.40.254 255.255.255.0"
-        #"secondaryips": ["192.168.20.200 255.255.255.0", ]
-        #"secondaryips": []
-    }
-    #print cli.request("SET_VLAN_INTERFACE", **message)
-    message = {
-        "name": "ext_4093"
-    }
-
-    print cli.request("GET_VLAN_INTERFACE", **message)
-
-    #print "mac_address =",res["results"][0]["macaddr"]
-    cli.request("DELETE_VLAN_INTERFACE", **message)
-    message = {
-        "vdom": "osvdm15",
-        "interface": "os_vid_1009",
-        "gateway": "192.168.30.1",
-        "netmask": "255.255.255.0",
-        "start_ip": "192.168.30.2",
-        "end_ip": "192.168.30.254"
-    }
-
-    #dhcp = cli.request("ADD_DHCP_SERVER", **message)
-    #print 'dhcp["results"]["mkey"] = ', dhcp["results"]["mkey"]
-
-    message = {
-        "vdom": "osvdm21",
-        "id": 1
-    }
-    #print cli.request("DELETE_DHCP_SERVER", **message)
-    #print cli.request("GET_DHCP_SERVER", **message)
-
-    #time.sleep(0)
-    message = {
-        "name": "osvdm20"
-    }
-    #print cli.request("ADD_VDOM", **message)
-    #print cli.request("DELETE_VDOM", **message)
-    #print cli.request("GET_VDOM", **message)
-    #print cli.request("ADD_VDOM_LNK", **message)
-    #print cli.request("GET_VDOM_LNK", **message)
-    #sleep(5)
-    #print cli.request("DELETE_VDOM_LNK", **message)
-    #print cli.request("GET_VDOM_LNK", {"name": ""})
-    message = {
-        "id": 1,
-        "vdom": "osvdm15",
-        #"rid": 1,
-        "reserved_address": """[
-            {
-                "id": 1,
-                "ip": "192.168.30.200",
-                "mac": "00:0C:29:70:51:D6"
-            },
-            {
-                "id": 2,
-                "ip": "192.168.30.201",
-                "mac": "00:0C:29:70:51:D7"
-            }
-        ]"""
-    }
-    message1 = {
-        "id": 1,
-        "vdom": "osvdm15",
-        "rid": 0,
-        "ip": "192.168.30.201",
-        "mac": "00:0C:29:70:52:D6"
-    }
-    #print cli.request("SET_DHCP_SERVER_RSV_ADDR", **message)
-    message = {
-        "vdom": "root"
-    }
-    #print cli.request("GET_ROUTER_STATIC", **message)
-    message = {
-        "vdom": "root",
-        "dst": "10.160.37.0 255.255.255.0",
-        "device": "port32",
-        "gateway": "10.160.37.1"
-    }
-    #print cli.request("ADD_ROUTER_STATIC", **message)
-    message = {
-        "id": 4,
-        "vdom": "root"
-    }
-    #print cli.request("DELETE_ROUTER_STATIC", **message)
-    message = {
-        "vdom": "root",
-        "srcintf": "npu0_vlink0",
-        "dstintf": "any",
-        "poolname": "t1"
-    }
-    #print cli.request("ADD_FIREWALL_POLICY", **message)
-    message = {
-        "vdom": "osvdm1"
-    }
-    #res = cli.request("GET_FIREWALL_POLICY", **message)
-    print "############################"
-    #print "res['results']=%s" % res["results"]
-    """
-    if res["results"]:
-        print "head id = %s" % res["results"][0]["policyid"]
-    else:
-        print "else"
-    print "############################"
-    """
-    #print cli.request("DELETE_FIREWALL_POLICY", **message)
-    message = {
-        "vdom": "osvdm21",
-        "name": "test",
-        "extip": "169.254.254.2",
-        "extintf": "vlan-ext1-4000",
-        "mappedip": "192.168.11.3"
-    }
-    #print cli.request("ADD_FIREWALL_VIP", **message)
-    message = {
-        "vdom": "root",
-        "name": "10.160.37.115"
-    }
-    #print cli.request("GET_FIREWALL_VIP", **message)
-    #print cli.request("DELETE_FIREWALL_VIP", **message)
-    message = {
-        "name": "test3",
-        "startip": "192.168.20.100",
-        "comments": "abcdefg0123456789"
-    }
-    #print cli.request("ADD_FIREWALL_IPPOOL", **message)
-    message = {
-        "name": "test3",
-        "vdom": "root"
-    }
-    #print cli.request("GET_FIREWALL_IPPOOL", **message)
-    #print cli.request("DELETE_FIREWALL_IPPOOL", **message)
-    message = {
-        "vdom": "root"
-    }
-    #print cli.request("GET_FIREWALL_IPPOOL", **message)
-    message = {
-        "name": "test44",
-        "vdom": "osvdm1",
-        "subnet": "192.168.44.0 255.255.255.0"
-    }
-    #print cli.request("ADD_FIREWALL_ADDRESS", **message)
-    message = {
-        "name": "test33",
-        "vdom": "osvdm1"
-    }
-    #print cli.request("GET_FIREWALL_ADDRESS", **message)
-    message = {
-        "name": "test33",
-        "vdom": "osvdm1"
-    }
-    #print cli.request("DELETE_FIREWALL_ADDRESS", **message)
-
-    message = {
-        "name": "testgrp33",
-        "vdom": "osvdm1",
-        "members": ["test33"]
-    }
-    #print cli.request("ADD_FIREWALL_ADDRGRP", **message)
-    message = {
-        "name": "testgrp33",
-        "vdom": "osvdm1"
-    }
-    #print cli.request("GET_FIREWALL_ADDRGRP", **message)
-    message = {
-        "name": "testgrp33",
-        "vdom": "osvdm1",
-        "members": ["test33", "test44"]
-    }
-    #print cli.request("SET_FIREWALL_ADDRGRP", **message)
-    message = {
-        "name": "testgrp33",
-        "vdom": "osvdm1"
-    }
-    #print cli.request("GET_FIREWALL_ADDRGRP", **message)
-    message = {
-        "name": "testgrp33",
-        "vdom": "osvdm1"
-    }
-    #print cli.request("DELETE_FIREWALL_ADDRGRP", **message)
-    message = {
-        "id": 2,
-        "vdom": "osvdm1",
-        "before": "1"
-    }
-    #print cli.request("MOVE_FIREWALL_POLICY", **message)
-    cli.logout()
-    print ""

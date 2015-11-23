@@ -73,10 +73,6 @@ class ApiRequest(object):
     def join(self):
         pass
 
-    @abc.abstractmethod
-    def copy(self):
-        pass
-
     def _issue_request(self):
         '''Issue a request to a provider.'''
         conn = (self._client_conn or
@@ -103,15 +99,12 @@ class ApiRequest(object):
                 # Update connection with user specified request timeout,
                 # the connect timeout is usually smaller so we only set
                 # the request timeout after a connection is established
-                LOG.debug(_("##### conn=%s" % conn))
                 if conn.sock is None:
                     conn.connect()
                     conn.sock.settimeout(self._http_timeout)
                 elif conn.sock.gettimeout() != self._http_timeout:
                     conn.sock.settimeout(self._http_timeout)
-
                 headers = copy.copy(self._headers)
-
                 if templates.RELOGIN in url:
                     url = json.loads(templates.LOGIN)['path']
                     conn.connect()
@@ -121,8 +114,8 @@ class ApiRequest(object):
                 cookie = self._api_client.auth_cookie(conn)
 
                 if self._url != json.loads(templates.LOGIN)['path'] and cookie:
-                    headers["Cookie"] = cookie["Cookie"]
-                    headers["X-CSRFTOKEN"] = cookie["X-CSRFTOKEN"]
+                    headers['Cookie'] = cookie['Cookie']
+                    headers['X-CSRFTOKEN'] = cookie['X-CSRFTOKEN']
 
                 try:
                     if self._body:
@@ -132,9 +125,10 @@ class ApiRequest(object):
                             body = json.dumps(self._body)
                     else:
                         body = None
-                    LOG.warn(_("####### issuing request: "
+                    LOG.warn(_("Issuing request: "
                                 "self._method = [%(method)s], "
-                                "url=%(url)s, body=%(body)s, headers=%(headers)s"),
+                                "url=%(url)s, body=%(body)s, "
+                               "headers=%(headers)s"),
                                  {'method': self._method, "url": url,
                                   "body": body, "headers": headers})
 
@@ -149,7 +143,8 @@ class ApiRequest(object):
                 response.body = response.read()
                 response.headers = response.getheaders()
                 elapsed_time = time.time() - issued_time
-                LOG.debug(_("@@@@@@ [ _issue_request ] [%(rid)d] Completed request '%(conn)s': "
+                LOG.debug(_("@@@@@@ [ _issue_request ] [%(rid)d] "
+                            "Completed request '%(conn)s': "
                             "%(status)s (%(elapsed)s seconds), "
                             "response.headers %(response.headers)s"
                             "response.body %(response.body)s"),
@@ -169,8 +164,6 @@ class ApiRequest(object):
                         # a request to authenticate, we should abort the
                         # request since there is no point in retrying.
                         self._abort = True
-                    #import ipdb
-                    #ipdb.set_trace()
                     LOG.debug("self._api_client=%s" % self._api_client)
                     # If request is unauthorized, clear the session cookie
                     # for the current provider so that subsequent requests
@@ -246,9 +239,6 @@ class ApiRequest(object):
         Returns: Return tuple(conn, url) where conn is a connection object
             to the redirect target and url is the path of the API request
         """
-        LOG.debug(_("##### headers=%s" % headers))
-        LOG.debug(_("##### conn=%s" % conn))
-        LOG.debug(_("##### self=%s" % self))
         url = None
         for name, value in headers:
             if name.lower() == "location":
@@ -270,8 +260,6 @@ class ApiRequest(object):
                     url = "%s?%s" % (result.path, result.query)
                 else:
                     url = result.path
-                LOG.debug(_("##### conn=%s, url=%s" % (conn, url)))
-                LOG.debug(_("##### url=%s" % url))
                 return (conn, url)      # case 1
             else:
                 LOG.warn(_("[%(rid)d] Received invalid redirect location: "

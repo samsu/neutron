@@ -46,6 +46,17 @@ def add_record(context, cls, **kwargs):
 def delete_record(context, cls, **kwargs):
     return cls.delete_record(context, kwargs)
 
+def update_record(context, record, **kwargs):
+    session = get_session(context)
+    try:
+        for key, value in kwargs.iteritems():
+            if hasattr(record, key):
+                setattr(record, key, value)
+        with session.begin(subtransactions=True):
+            session.add(record)
+    except Exception as e:
+        raise os_db_exception.DBError(e)
+
 def query_record(context, cls, **kwargs):
     return db_query(cls, context, **kwargs).first()
 
@@ -56,7 +67,7 @@ def query_count(context, cls, **kwargs):
     return db_query(cls, context, **kwargs).count()
 
 def get_session(context):
-    return context.session if hasattr(context, "session") else context
+    return context.session if hasattr(context, 'session') else context
 
 def primary_keys(cls):
     """
@@ -71,9 +82,6 @@ def primary_keys(cls):
 def db_query(cls, context, **kwargs):
     """Get a filtered vlink_vlan_allocation record."""
     session = get_session(context)
-    LOG.debug(_("##### kwargs = %s" % kwargs))
-    #if cls.__tablename__ == 'networks':
-    #    import ipdb; ipdb.set_trace()
     query = session.query(cls)
     for key, value in kwargs.iteritems():
         kw = {key: value}
@@ -82,6 +90,20 @@ def db_query(cls, context, **kwargs):
 
 
 class DBbase(object):
+    @classmethod
+    def init_records(cls, context, **kwargs):
+        """Add records to be allocated into the table"""
+        session = get_session(context)
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if not record:
+                record = cls()
+                for key, value in kwargs.iteritems():
+                    if hasattr(record, key):
+                        setattr(record, key, value)
+                session.add(record)
+
+
     @classmethod
     def add_record(cls, context, **kwargs):
         """Add vlanid to be allocated into the table"""
@@ -94,9 +116,9 @@ class DBbase(object):
                     if hasattr(record, key):
                         setattr(record, key, value)
                 session.add(record)
-                rollback = record._prepare_rollback(context,
-                                                    cls.delete_record,
-                                                    **kwargs)
+                rollback = cls._prepare_rollback(context,
+                                                 cls.delete_record,
+                                                 **kwargs)
             else:
                 rollback = {}
                 #raise os_db_exception.DBDuplicateEntry
@@ -107,15 +129,7 @@ class DBbase(object):
     @staticmethod
     def update_record(context, record, **kwargs):
         """Add vlanid to be allocated into the table"""
-        session = get_session(context)
-        try:
-            for key, value in kwargs.iteritems():
-                if hasattr(record, key):
-                    setattr(record, key, value)
-            with session.begin(subtransactions=True):
-                session.add(record)
-        except Exception as e:
-            raise os_db_exception.DBError
+        return update_record(context, record, **kwargs)
 
     @classmethod
     def delete_record(cls, context, kwargs):
@@ -136,25 +150,23 @@ class DBbase(object):
     @classmethod
     def query(cls, context, **kwargs):
         """Get a filtered vlink_vlan_allocation record."""
-        session = get_session(context)
-        query = db_query(cls, session, **kwargs)
+        query = db_query(cls, context, **kwargs)
         return query.first()
 
     @classmethod
     def query_all(cls, context, **kwargs):
         """Get a filtered vlink_vlan_allocation record."""
-        session = get_session(context)
-        query = db_query(cls, session, **kwargs)
+        query = db_query(cls, context, **kwargs)
         return query.all()
 
     @classmethod
     def query_count(cls, context, **kwargs):
         """Get a filtered vlink_vlan_allocation record."""
-        session = get_session(context)
-        query = db_query(cls, session, **kwargs)
+        query = db_query(cls, context, **kwargs)
         return query.count()
 
-    def _prepare_rollback(self, context, func, **kwargs):
+    @staticmethod
+    def _prepare_rollback(context, func, **kwargs):
         if not func:
             raise ValueError
         rollback = {
@@ -175,7 +187,6 @@ class Fortinet_ML2_Namespace(model_base.BASEV2, DBbase):
 
     @classmethod
     def add_record(cls, context, **kwargs):
-        #import ipdb;ipdb.set_trace()
         res = super(Fortinet_ML2_Namespace, cls).add_record(context, **kwargs)
         if res.get('rollback'):
             res['result']._allocate_vdom(context, res['result'])
@@ -189,10 +200,15 @@ class Fortinet_ML2_Namespace(model_base.BASEV2, DBbase):
 
 class Fortinet_ML2_Subnet(model_base.BASEV2, DBbase):
     """Schema to map subnet to Fortinet dhcp interface."""
-    id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    subnet_id = sa.Column(sa.String(36))
+    subnet_id = sa.Column(sa.String(36), primary_key=True)
     vdom = sa.Column(sa.String(11))
-    mkey = sa.Column(sa.Integer)
+    interface=sa.Column(sa.String(11), default=None)
+    gateway=sa.Column(sa.String(32), default=None)
+    netmask=sa.Column(sa.String(32), default=None)
+    start_ip=sa.Column(sa.String(32), default=None)
+    end_ip=sa.Column(sa.String(32),default=None)
+    edit_id = sa.Column(sa.Integer)
+
 
 class Fortinet_ML2_ReservedIP(model_base.BASEV2, DBbase):
     """Schema for Fortinet dhcp server reserved ip."""
@@ -215,24 +231,28 @@ class Fortinet_ML2_ReservedIP(model_base.BASEV2, DBbase):
         if not getattr(record, 'edit_id'):
             last_record = db_query(cls, context, subnet_id=record.subnet_id).\
                                       order_by(cls.edit_id.desc()).first()
-            import ipdb;ipdb.set_trace()
             edit_id = last_record.edit_id + 1 if last_record.edit_id else 1
             record.update_record(context, record, edit_id=edit_id)
         return record.edit_id
 
 
-class Fortinet_Static_Router(model_base.BASEV2, DBbase):
+class Fortinet_Static_Router(model_base.BASEV2, models_v2.HasId, DBbase):
     """Schema for Fortinet static router."""
-    subnet_id = sa.Column(sa.String(36), primary_key=True)
     vdom = sa.Column(sa.String(11))
+    subnet_id = sa.Column(sa.String(36))
+    dst = sa.Column(sa.String(32))
+    device = sa.Column(sa.String(32))
+    gateway = sa.Column(sa.String(32))
     edit_id = sa.Column(sa.Integer)
 
-class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
+
+class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, models_v2.HasId,
+                                     DBbase):
     """Schema for Fortinet vlink vlan interface."""
-    vlan_id = sa.Column(sa.Integer, primary_key=True)
     vdom = sa.Column(sa.String(11))
     inf_name_int_vdom = sa.Column(sa.String(11))
     inf_name_ext_vdom = sa.Column(sa.String(11))
+    vlanid = sa.Column(sa.Integer)
     allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
 
     @staticmethod
@@ -249,21 +269,71 @@ class Fortinet_Vlink_Vlan_Allocation(model_base.BASEV2, DBbase):
 
     @classmethod
     def add_record(cls, context, **kwargs):
-        session = get_session(context)
-        #with session.begin(subtransactions=True):
         record = cls.query(context, **kwargs)
         if not record:
-            record = cls.query(context, allocated=False)
             kwargs.setdefault('allocated', True)
-            kwargs.setdefault('inf_name_int_vdom', const.PREFIX["vint"] + \
-                                   str(record.vlan_id))
-            kwargs.setdefault('inf_name_ext_vdom', const.PREFIX["vext"] + \
-                                   str(record.vlan_id))
+            if kwargs.get('vdom', None):
+                kwargs.setdefault('inf_name_int_vdom',
+                                  kwargs['vdom'] + const.POSTFIX['vint'])
+                kwargs.setdefault('inf_name_ext_vdom',
+                                  kwargs['vdom'] + const.POSTFIX['vext'])
+            # TODO: if no vlanid needed, then it should able to add
+            # a new record, consider to separate vlanid to a table.
+            record = cls.query(context, allocated=False)
             record.update_record(context, record, **kwargs)
-            rollback = record._prepare_rollback(context, cls.delete_record,
-                                             kwargs)
+            rollback = cls._prepare_rollback(context, cls.delete_record,
+                                             **kwargs)
         else:
             rollback = {}
+        ## need to check the attribute in the record whether updated
+        ## # after update_record()
+        return {'result': record, 'rollback': rollback}
+
+    @classmethod
+    def delete_record(cls, context, kwargs):
+        """Delete vlanid to be allocated into the table"""
+        session = get_session(context)
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if record:
+                record.update_record(context, record, **cls.reset())
+        return record
+
+
+class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
+    """Schema for Fortinet vlink vlan interface."""
+    vlink_ip_subnet = sa.Column(sa.String(32), primary_key=True)
+    vdom = sa.Column(sa.String(11))
+    vlink_id = sa.Column(sa.String(36),
+                         sa.ForeignKey("fortinet_vlink_vlan_allocations.id",
+                                       ondelete="CASCADE"), nullable=True)
+    allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
+
+    @staticmethod
+    def reset():
+        """
+        set all value of keys in kwargs to the default value(None or False)
+        """
+        return {
+            'vdom': None,
+            'vlanid': None,
+            'allocated': False
+        }
+
+    @classmethod
+    def add_record(cls, context, **kwargs):
+        session = get_session(context)
+        with session.begin(subtransactions=True):
+            record = cls.query(context, **kwargs)
+            if not record:
+                record = cls.query(context, allocated=False)
+                kwargs.setdefault('allocated', True)
+                record.update_record(context, record, **kwargs)
+                rollback = cls._prepare_rollback(context,
+                                                 cls.delete_record,
+                                                 **kwargs)
+            else:
+                rollback = {}
         ## need to check the attribute in the record whether updated
         ## # after update_record()
         return {'result': record, 'rollback': rollback}
@@ -284,52 +354,11 @@ class Fortinet_Vdom_Vlink(model_base.BASEV2, DBbase):
     name = sa.Column(sa.String(11), primary_key=True)
     vdom = sa.Column(sa.String(11), primary_key=True)
 
-
-class Fortinet_Vlink_IP_Allocation(model_base.BASEV2, DBbase):
-    """Schema for Fortinet vlink vlan interface."""
-    vlink_ip_subnet = sa.Column(sa.String(32), primary_key=True)
-    vdom = sa.Column(sa.String(11))
-    vlan_id = sa.Column(sa.Integer)
-    allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
-
-    @staticmethod
-    def reset():
-        """
-        set all value of keys in kwargs to the default value(None or False)
-        """
-        return {
-            'vdom': None,
-            'vlan_id': None,
-            'allocated': False
-        }
-
     @classmethod
     def add_record(cls, context, **kwargs):
-        session = get_session(context)
-        with session.begin(subtransactions=True):
-            record = cls.query(context, **kwargs)
-            if not record:
-                record = cls.query(context, allocated=False)
-                kwargs.setdefault('allocated', True)
-                record.update_record(context, record, **kwargs)
-                rollback = record._prepare_rollback(context,
-                                                    cls.delete_record,
-                                                    kwargs)
-            else:
-                rollback = {}
-        ## need to check the attribute in the record whether updated
-        ## # after update_record()
-        return {'result': record, 'rollback': rollback}
-
-    @classmethod
-    def delete_record(cls, context, kwargs):
-        """Delete vlanid to be allocated into the table"""
-        session = get_session(context)
-        with session.begin(subtransactions=True):
-            record = cls.query(context, **kwargs)
-            if record:
-                record.update_record(context, record, **cls.reset())
-        return record
+        if kwargs.get('vdom', None):
+            kwargs.setdefault('name', kwargs['vdom'] + const.POSTFIX['vdlink'])
+        return super(Fortinet_Vdom_Vlink, cls).add_record(context, **kwargs)
 
 
 class Fortinet_Firewall_Policy(model_base.BASEV2, DBbase):
@@ -361,8 +390,6 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
     ## secondary_ip = sa.Column(sa.String(50), default=None)
     allocated = sa.Column(sa.Boolean(), default=False, nullable=False)
     ## TODO: delete the field bound
-    ##bound = sa.Column(sa.Boolean(), default=False, nullable=False)
-
 
     @staticmethod
     def reset():
@@ -374,7 +401,6 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
             'vdom': None,
             'vip_name': None,
             'allocated': False
-            #'bound': False
         }
 
     @classmethod
@@ -386,9 +412,9 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
                 record = cls.query(context, allocated=False)
                 kwargs.setdefault('allocated', True)
                 record.update_record(context, record, **kwargs)
-                rollback = record._prepare_rollback(context,
-                                                    cls.delete_record,
-                                                    kwargs)
+                rollback = cls._prepare_rollback(context,
+                                                 cls.delete_record,
+                                                 **kwargs)
             else:
                 rollback = {}
         ## need to check the attribute in the record whether updated
@@ -409,7 +435,7 @@ class Fortinet_FloatingIP_Allocation(model_base.BASEV2, DBbase):
 
 class Fortinet_Firewall_VIP(model_base.BASEV2, DBbase):
     name = sa.Column(sa.String(36), primary_key=True)
-    vdom = sa.Column(sa.String(11))
+    vdom = sa.Column(sa.String(11), primary_key=True)
     extip = sa.Column(sa.String(32))
     extintf = sa.Column(sa.String(32))
     mappedip = sa.Column(sa.String(32), default=None)
@@ -422,6 +448,12 @@ class Fortinet_Firewall_IPPool(model_base.BASEV2, DBbase):
     endip = sa.Column(sa.String(32))
     type = sa.Column(sa.String(32), default="one-to-one")
     comments = sa.Column(sa.String(32), default=None)
+
+    @classmethod
+    def add_record(cls, context, **kwargs):
+        kwargs.setdefault('endip', kwargs.get('startip', None))
+        return super(Fortinet_Firewall_IPPool, cls).add_record(context,
+                                                               **kwargs)
 
 
 class Fortinet_Firewall_Address(model_base.BASEV2, DBbase):
@@ -436,10 +468,10 @@ class Fortinet_Firewall_Address(model_base.BASEV2, DBbase):
 class Fortinet_Interface(model_base.BASEV2, DBbase):
     name = sa.Column(sa.String(36), primary_key=True)
     vdom = sa.Column(sa.String(11))
-    vlan_id = sa.Column(sa.Integer)
+    vlanid = sa.Column(sa.Integer)
     interface = sa.Column(sa.String(11), default=None)
     type = sa.Column(sa.String(32),default=None)
-    ip = sa.Column(sa.String(32), default="0.0.0.0 0.0.0.0")
+    ip = sa.Column(sa.String(32), default=const.EXT_DEF_DST)
     secondary_ip = sa.Column(sa.String(11), default="enable")
     alias = sa.Column(sa.String(32), default=None)
 
@@ -448,15 +480,4 @@ class Fortinet_Interface_subip(model_base.BASEV2, DBbase):
     ip = sa.Column(sa.String(32), primary_key=True)
     name = sa.Column(sa.String(11), default=None)
     vdom = sa.Column(sa.String(11))
-
-
-class ML2_FortinetPort(model_base.BASEV2, models_v2.HasId,
-                      models_v2.HasTenant, DBbase):
-    """Schema for Fortinet port."""
-    network_id = sa.Column(sa.String(36),
-                           sa.ForeignKey("ml2_Fortinetnetworks.id"),
-                           nullable=False)
-    admin_state_up = sa.Column(sa.Boolean, nullable=True)
-    physical_interface = sa.Column(sa.String(36))
-    vlan_id = sa.Column(sa.String(36))
 
